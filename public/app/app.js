@@ -19,6 +19,11 @@ function fmt(str) {
   const frac = (m[3] ?? "").replace(/0+$/, "");
   return (m[1] ? "-" : "") + intFmt.format(BigInt(m[2])) + (frac ? "٫" + faDigits(frac) : "");
 }
+const dateFmt = new Intl.DateTimeFormat("fa-IR-u-ca-persian", { timeZone: "Asia/Tehran", dateStyle: "short", timeStyle: "short" });
+function jdate(iso) {
+  const d = new Date(iso);
+  return iso && !Number.isNaN(d.getTime()) ? dateFmt.format(d) : "";
+}
 const assetName = (a) => (a === "IRT" ? "تومان" : a === "USDT" ? "تتر" : a);
 const money = (v, asset) => `${fmt(v)} ${assetName(asset)}`;
 const KIND = { BUY: "خرید", SELL: "فروش", PAY: "پرداخت", RECEIVE: "دریافت" };
@@ -33,7 +38,7 @@ function h(tag, attrs, ...kids) {
     else if (k === "value" || k === "checked" || k === "disabled") el[k] = v;
     else el.setAttribute(k, v === true ? "" : v);
   }
-  for (const kid of kids.flat()) {
+  for (const kid of kids.flat(Infinity)) {
     if (kid === null || kid === undefined || kid === false) continue;
     el.append(kid instanceof Node ? kid : document.createTextNode(String(kid)));
   }
@@ -273,7 +278,7 @@ function dealRow(e, { client, refresh }) {
     h("div", { class: "grow" },
       h("div", {}, title, h("span", { class: `pill ${e.status}` }, STATUS[e.status] ?? e.status)),
       h("div", { class: "muted" }, sub),
-      h("div", { class: "muted" }, faDigits((e.createdAt ?? "").slice(0, 16).replace("T", " "))),
+      h("div", { class: "muted" }, jdate(e.createdAt)),
       actions.length ? h("div", { class: "actions" }, actions) : null));
 }
 
