@@ -9,7 +9,7 @@ import {
 import {
   type Account, accountName, approvedLedger, createEntry, createPendingAction, type EditChanges, editPayload,
   type Entry, findByCardMessage, getAccount, getByCode, getSetting, isAdmin, listAccounts, recent, setBatch,
-  setCardMessage,
+  setCardMessage, transition,
 } from "../db";
 import {
   type Action, DEFAULT_DEVIATION_PCT, deviationPct, expandRateShorthand, parseDeviationSetting, toAction,
@@ -47,6 +47,22 @@ interface Ctx {
   account: Account | null;
 }
 
+/** cancelled_by for entries whose card could not be sent. */
+const ORPHAN_ACTOR = "ربات (کارت ارسال نشد)";
+
+/**
+ * Send the card for just-created pending entries; if Telegram refuses, cancel them so no
+ * pending entry is left without a card to approve it from, then rethrow.
+ */
+async function sendCard(c: Ctx, ids: number[], text: string, keyboard: Keyboard | null): Promise<number> {
+  try {
+    return await send(c, text, keyboard);
+  } catch (e) {
+    await transition(c.app.db, ids, "pending", "cancelled", { cancelledBy: ORPHAN_ACTOR, cancelledAt: c.app.now() });
+    throw e;
+  }
+}
+
 const who = (u: User | undefined): string =>
   !u ? "?" : u.username ? `@${u.username}` : [u.first_name, u.last_name].filter(Boolean).join(" ");
 
@@ -55,7 +71,7 @@ async function send(c: Pick<Ctx, "app" | "msg" | "chatId">, text: string, keyboa
     chat_id: c.chatId,
     text,
     parse_mode: "HTML",
-    reply_parameters: { message_id: c.msg.message_id },
+    reply_parameters: { message_id: c.msg.message_id, allow_sending_without_reply: true },
     ...(keyboard ? { reply_markup: keyboard } : {}),
   });
   return res.message_id;
@@ -197,7 +213,7 @@ async function dispatch(c: Ctx, action: Action, joke: string | undefined, out: N
       });
       const d = deviation(c, e.trade);
       const card = renderEntry(e, { ref: d?.ref ?? null, deviationPct: d?.dev ?? null, alertPct: c.alertPct });
-      await setCardMessage(app.db, e.id, await send(c, card, entryKeyboard(e)));
+      await setCardMessage(app.db, e.id, await sendCard(c, [e.id], card, entryKeyboard(e)));
       return;
     }
     case "settle":
@@ -313,7 +329,7 @@ async function settle(c: Ctx, code: string): Promise<void> {
   }
   const ids = payments.map((p) => p.id);
   await setBatch(app.db, ids, String(ids[0]));
-  await send(c, renderSettlement(deal, payments), settlementKeyboard(ids[0]));
+  await sendCard(c, ids, renderSettlement(deal, payments), settlementKeyboard(ids[0]));
 }
 
 async function edit(

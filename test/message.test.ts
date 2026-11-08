@@ -17,6 +17,7 @@ import { handleMessage } from "../src/handlers/message";
 import { BUSY_TEXT, CLIENT_WRITE_REFUSALS, ORDINARY_LINES, pick } from "../src/jokes";
 import { openDeals, summarize } from "../src/ledger";
 import type { NluOutput } from "../src/nlu";
+import { TgError } from "../src/telegram";
 import type { Trade } from "../src/trade";
 import { FakeNlu, fakeFetch, FIXED_NOW, makeApp, type TestApp } from "./fakes";
 
@@ -86,7 +87,7 @@ describe("fast path", () => {
     const call = sent(a)[0].params;
     expect(call.chat_id).toBe(chat.id);
     expect(call.parse_mode).toBe("HTML");
-    expect(call.reply_parameters).toEqual({ message_id: m.message_id });
+    expect(call.reply_parameters).toEqual({ message_id: m.message_id, allow_sending_without_reply: true });
     expect(lastButtons(a)).toContain(`ok:${e.id}`);
     expect(lastText(a)).toContain("قیمت نوبیتکس");
     expect(e.cardMsgId).toBe(1); // FakeTg's first message_id
@@ -239,7 +240,7 @@ describe("refusals and fallbacks", () => {
     const m = msg(chat, CLIENT, "سلام");
     await handleMessage(a, m, m.text!);
     expect(lastText(a)).toBe("سلام &lt;دوست&gt;\n\n<i>ha &amp; ha</i>");
-    expect(sent(a)[0].params.reply_parameters).toEqual({ message_id: m.message_id });
+    expect(sent(a)[0].params.reply_parameters).toEqual({ message_id: m.message_id, allow_sending_without_reply: true });
   });
 });
 
@@ -315,6 +316,39 @@ describe("queries", () => {
     expect(nobitexCalls).toBe(1);
     expect(lastText(a)).toContain("BTC");
     expect(lastText(a)).toContain("۲۶۶٬۰۰۰");
+  });
+});
+
+describe("card send failures leave no orphans", () => {
+  test("replies may go out without the original message", async () => {
+    const chat = freshGroup();
+    const a = app();
+    const m = msg(chat, ADMIN, "#خرید ۱۰ تتر ۲۶۶۰۰۰");
+    await handleMessage(a, m, m.text!);
+    expect(sent(a).at(-1)!.params.reply_parameters).toEqual({ message_id: m.message_id, allow_sending_without_reply: true });
+  });
+
+  test("a failed card send cancels the new pending entry", async () => {
+    const chat = freshGroup();
+    const a = app();
+    a.tg.fail("sendMessage", chat.id, new TgError(400, "Bad Request: not enough rights"));
+    const m = msg(chat, ADMIN, "#خرید ۱۰ تتر ۲۶۶۰۰۰");
+    await expect(handleMessage(a, m, m.text!)).rejects.toThrow("not enough rights");
+    const [e] = await recent(db, chat.id, 5);
+    expect(e.status).toBe("cancelled");
+  });
+
+  test("a failed settlement card send cancels the whole batch", async () => {
+    const chat = freshGroup();
+    const deal = await approved(chat.id, trade());
+    const a = app(nlu({ intent: "settle_deal", deal_code: deal.code }));
+    a.tg.fail("sendMessage", chat.id, new TgError(403, "Forbidden: bot was kicked"));
+    const m = msg(chat, ADMIN, `تسویه ${deal.code}`);
+    await expect(handleMessage(a, m, m.text!)).rejects.toThrow();
+    const created = (await recent(db, chat.id, 10)).filter((e) => e.id !== deal.id);
+    expect(created).toHaveLength(2);
+    for (const e of created) expect(e.status).toBe("cancelled");
+    expect((await getEntry(db, deal.id))!.status).toBe("approved");
   });
 });
 
