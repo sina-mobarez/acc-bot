@@ -4,38 +4,40 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-A Telegram bot (python-telegram-bot v22, async) that turns `#`-prefixed Persian/English trade and payment messages in client groups into deal cards with approve/reject/cancel buttons. Deals live in SQLite, and approved ones are mirrored to Google Sheets when that's configured. All user-facing text is Persian. README.md has the full message syntax, the commands and the deployment steps.
+A Telegram assistant (Cloudflare Worker, TypeScript, D1) for a trading office. In client groups, admins and clients talk to it in plain Persian (tag or reply); `#`-prefixed messages use the strict legacy syntax. Trades and payments become deal cards that an admin must approve. A Mini App gives admins a dashboard. All user-facing text is Persian. README.md has the user guide and deployment steps. The old Python v1 is gone (see git history).
 
 ## Commands
 
 ```
-uv run pytest -q                                   # all tests (uv creates .venv; pytest is in the dev group)
-uv run pytest -q tests/test_parser.py::test_name   # a single test
-uv run python -m accbot.main                       # run locally (needs BOT_TOKEN in .env; see .env.example)
+npm test                                          # Vitest + @cloudflare/vitest-plugin (local D1, migrations/ applied)
+npx vitest run test/parser.test.ts -t "<name>"    # a single test
+npx tsc --noEmit                                  # typecheck; keep it clean
+npm run dev                                       # wrangler dev, secrets from .dev.vars (see .dev.vars.example)
 ```
 
-In the Docker image (as the README shows): `docker run --rm acc-bot-bot sh -c "pip install -q pytest && python -m pytest -q tests"`.
-
-There's no linter or formatter config. `requirements.txt` (used by the Dockerfile) duplicates `pyproject.toml` dependencies, so update both together.
+Use Node 22+ (wrangler 4 needs it; a local copy may live in gitignored `.tools/`). If npm 10 crashes on peer deps, use `npx npm@11 install`. Don't run `wrangler deploy`, `secret` or remote `d1` commands unless the owner asks.
 
 ## Architecture
 
-`accbot/main.py` wires everything up. It reads env at import time, creates module-level singletons (`store`, `sheet`, `broadcaster`) and holds the group handlers plus the deal button state machine.
+One Worker, `src/index.ts`:
+- `POST /tg`: Telegram webhook, checked via the `X-Telegram-Bot-Api-Secret-Token` header. It acks immediately and does the work in `ctx.waitUntil`; `update_id` is deduped in D1.
+- `POST /setup`: same secret header. Calls getMe, setWebhook, commands and the menu button, and stores `bot_id`, `bot_username` and `public_url` in settings.
+- `GET /health/prices`; `/api/*`: the Mini App admin API (`Authorization: tma <initData>`, validated in `miniapp/auth.ts`); everything else is static assets (Mini App at `/app/`, from `public/app`).
+- Cron every minute (`cron.ts`): daily debtor reminders at 10:00 Tehran (UTC+03:30), broadcast batches, and pruning of processed updates.
+- D1 database `acc-bot` (binding `DB`), schema in `migrations/`.
 
-- **parser.py**: pure parsing into a frozen `Trade` dataclass. It's the only place that knows the syntax. Text goes through `normalize()` first (Persian/Arabic digits and separators to ASCII, Arabic ی/ک, ZWNJ to space). `parse_message` returns `None` for non-deal text (anything without a leading `#`) and raises `TradeError` with a Persian message for a recognizable deal it can't record. All amounts are `Decimal`. A toman-denominated trade keeps the exact `toman_total` and rounds `amount` per `PRECISION`. Toman is the asset code `IRT` (`TOMAN`).
-- **storage.py**: one synchronous sqlite3 connection in autocommit mode. `SCHEMA` is `CREATE IF NOT EXISTS`, and new `deals` columns go in the `MIGRATIONS` list (an ALTER TABLE runs at startup), not in place. Decimals are stored as TEXT. `transition(id, from, to, **fields)` is a compare-and-set UPDATE that returns whether it applied. It's the concurrency guard against double taps, so don't change a status without it.
-- **Deal lifecycle**: `pending → approving → approved → cancelled`, or `pending → rejected | cancelled`. `approving` is a lock held while the Sheets write runs. If the write fails, the deal rolls back to `pending`. Callback data is `<action>:<deal_id>` with actions `ok`, `no`, `cx` (cancel), `cy`/`cn` (confirm or abort cancelling an approved deal).
-- **ledger.py**: `summarize()` builds the `/balance` account from approved trades. The sign convention is from our side: `owed > 0` means the client owes us. BUY adds the asset and subtracts toman, SELL does the reverse, PAY is `+`, RECEIVE is `-`.
-- **card.py**: HTML rendering (deal card, `/deals` list, balance), inline keyboards and Jalali dates. Messages use `ParseMode.HTML`.
-- **sheets.py**: gspread is synchronous, so every call is wrapped in `asyncio.to_thread`. It's enabled only when `SHEET_ID` is set and the credentials file exists. It creates the worksheet, header and RTL layout on first use, and finds rows by deal code in column 1 for status updates.
-- **broadcast.py**: `Broadcaster.register()` adds handlers in negative groups. Group -2 is a `TypeHandler` that records every group it sees in the `chats` table, because Telegram can't list a bot's chats. Group -1 grabs the next private message while a broadcast is waiting, before deal parsing runs. Handles supergroup migration (`migrate_chat`), rate limiting (`SEND_DELAY`, `RetryAfter`) and deleting a broadcast everywhere. At startup, `refresh()` rechecks the bot's status in every known chat.
+Message flow: `handlers/update.ts` (dedupe, routing) → `handlers/message.ts` → either `parser.ts` (`#` grammar) or `nlu.ts` (Gemini) → `intent.ts` turns the NLU output plus the sender's role into an `Action` → the handler executes it and renders with `cards.ts`. `handlers/callback.ts` runs the card buttons, `handlers/commands.ts` the slash commands.
 
-## Permissions (security-relevant)
+Other modules: `money.ts` (Decimal, normalize), `trade.ts` (types), `ledger.ts` (`summarize` plus FIFO `allocate` for settlement), `db.ts` (all queries), `telegram.ts` (API client), `prices.ts` (Nobitex rial÷10 to toman, KuCoin), `jokes.ts`, `broadcast.ts`, `reminders.ts`, `miniapp/api.ts`. `app.ts` defines the `App` dependency bag handlers receive (tests substitute fakes from `test/fakes.ts`).
 
-- With `APPROVER_IDS` set, only those users can approve, reject or cancel an approved deal. When it's empty, any group admin can, and in a private chat anyone can.
-- Broadcasting **never** falls back: with `APPROVER_IDS` empty, it's disabled (`Broadcaster.allowed`). Keep it that way.
-- The creator of a pending deal can withdraw it, and so can an approver.
+## Rules to keep
 
-## Deployment notes
-
-It deploys by rsync to `pingi-stage:/opt/acc-bot` and runs with `docker compose up -d --build`. Telegram is blocked on that host, so the container joins the external `pingi-bot_botnet` network and goes through `socks5h://pingi-xray:1080`. It depends on pingi-bot's stack running. The DB is `/data/deals.db` on the `acc-bot_accdata` volume.
+- **Nothing is approved without an admin.** Only an admin's ✅ or a Mini App action moves a deal to approved. Bot text, NLU output and clients never do.
+- **Gemini never computes numbers.** `nlu.ts` only extracts text fields; amounts, rates and totals are parsed and calculated in code.
+- **Money is `Decimal`** (decimal.js, precision 40) in memory and TEXT in D1. Never use a JS `number` for money. A toman-denominated trade (`tomanTotal`) must have a rate.
+- **Ledger sign convention** is from our side: `owed > 0` means the client owes us. BUY: client owes the asset, we owe toman. SELL: the reverse. PAY is `+`, RECEIVE is `−`.
+- **Status changes only through the compare-and-set `transition`** in `db.ts`. It is the guard against double taps and races.
+- **Permissions.** Clients see only their own chat and cannot write. Admins are the `ADMIN_IDS` secret plus the `admins` table; Telegram group-admin status grants nothing. Broadcast never falls back to "anyone".
+- **Own-key-safe lookups.** Use `Map` or `Object.hasOwn` for anything keyed by user or LLM text (never `obj[key]` on a plain object).
+- **Escape output.** All user and LLM text going into HTML messages is HTML-escaped.
+- **Free-plan budget.** Free Workers allow ~50 external subrequests and ~50 D1 queries per invocation. The cron jobs (reminders, broadcast, prune) share one per-invocation `Budget` (`INVOCATION_BUDGET` in `src/constants.ts`); each Telegram call and D1 statement takes from it. Keep new cron work inside it.

@@ -1,82 +1,68 @@
-# acc-bot
+# acc-bot v2
 
-Telegram bot (@Arian_Dealer_bot) that records trades posted in client groups. Write a trade in the group and the bot replies with a Persian deal card that has **✅ تایید / ❌ رد / 🚫 لغو** buttons. Every deal is stored in SQLite. Approved deals are also written to Google Sheets when it's configured. The client name comes from the group title.
+A Telegram assistant for recording trades and payments with clients. It runs as a single Cloudflare Worker on D1. In a client group you tag the bot (or reply to it) and write in plain Persian. It understands the message, drafts a deal card with ✅ / ❌ / 🚫 buttons, and nothing is recorded until an admin approves it. A Mini App gives admins a dashboard, client accounts, deals and settings.
 
-## Syntax
+## Talking to the bot
 
-```
-#خرید ۱۰۰ تا تتر رو قیمت ۲۷۵۰۰۰ تومن
-#فروش ۳۰۰ تا تتر رو قیمت ۳۲۰۰۰۰
-#خرید ۲ میلیون تتر ۲۷۵ هزار بانک ملت      <- text after the price is a note
-#sell 100 usdt @ 320000
-#خرید ۵۰۰ میلیون تومان به قیمت ۲۶۴۰۰۰       <- toman amount: 500,000,000 ÷ 264,000 = 1,893.94 USDT
-#فروش ۱ میلیارد تومن تتر به قیمت ۲۶۵۰۰۰      <- works the same for sell
-```
-
-When `تومان`/`تومن` follows the amount, the amount is in toman. The asset amount is `toman ÷ price`, rounded to 2 decimals for USDT, and the toman total is kept exact. A price is required, and the bot replies with an example if it's missing.
-
-### Payments
-
-Everything is written from **our** side:
+In a client group, tag `@bot` or reply to one of its messages, then write normally:
 
 ```
-#دریافت ۵۰ میلیون تومن کارت به کارت   <- client paid us (RECEIVE)
-#پرداخت ۲۷٬۵۰۰٬۰۰۰ تومن                <- we paid the client (PAY)
-#دریافت ۱۰۰ تتر / #ارسال ۲۰۰ تتر       <- tether delivered to us / sent by us
+@bot خرید ۱۰۰ تتر رو ۲۷۵                  <- trade: we bought 100 USDT at 275,000 toman
+@bot فروختیم ۵۰۰ میلیون تومن تتر ۲۶۵ هزار   <- toman-amount trade: USDT = toman ÷ price
+@bot ۵۰ میلیون تومن کارت به کارت دریافت کردیم  <- payment received from the client
+@bot ۲۷ میلیون تومن پرداخت کردیم            <- payment sent to the client
+@bot تسویه                                   <- reply to a deal card: settle it against recorded payments
+@bot مقدار معامله ۱۲ رو ۵۰ کن / لغو معامله ۱۲   <- edit or cancel a deal by its code
+@bot مانده حساب چنده؟                         <- balance
+@bot قیمت تتر و بیت‌کوین چنده؟                 <- live prices (Nobitex, KuCoin)
 ```
 
-Payments use the same card and approval flow as trades. Without an asset word, the amount is in toman.
+The old `#` syntax still works and does not need an LLM: `#خرید ۱۰۰ تتر رو قیمت ۲۷۵۰۰۰`, `#فروش ۳۰۰ تتر ۳۲۰۰۰۰`, `#دریافت ۵۰ میلیون تومن`, `#sell 100 usdt @ 320000`. Persian and Arabic digits, `هزار`/`میلیون`/`میلیارد` and `k`/`m`/`b` multipliers are accepted. When `تومان`/`تومن` follows the amount, the amount is in toman and the asset amount is `toman ÷ price`.
 
-- Every trade or payment message **must start with `#`**, followed by `خرید`/`buy`, `فروش`/`sell`, `پرداخت`/`ارسال`/`pay` or `دریافت`/`receive`. Messages without `#` are ignored. Slash commands are unchanged.
-- Multipliers: `هزار`, `میلیون`, `میلیارد`, `k`, `m`/`mil`/`million`, `b`.
-- Price keywords: `رو قیمت`, `به قیمت`, `قیمت`, `فی`, `نرخ`, `@`, `at`. A bare number after the asset also works.
-- Persian and Arabic digits and `٬`/`٫` separators are accepted. The asset defaults to تتر (USDT).
+A deal card shows the numbers and a comparison with the live Nobitex rate. Admins approve with ✅, reject with ❌ or cancel with 🚫. The creator of a pending deal can withdraw it, and cancelling an approved deal asks for confirmation. Admins can also approve and manage deals from the Mini App.
 
-## Commands (in a client group)
+**Roles.** Admins are the Telegram user ids in the `ADMIN_IDS` secret plus anyone added in the Mini App. Being a Telegram group admin grants nothing. Everyone else is a client: clients can only ask (balance, deals, prices) about their own chat and can't create, edit, settle or cancel anything. A client attempting a trade is refused.
 
-- `/deals [n]`: the last n deals (default 15, max 40) with their status
-- `/balance`: who owes whom, per asset, from approved trades and payments (BUY: client owes the asset and we owe the toman; SELL: the reverse; PAY/RECEIVE settle it), plus trade stats and payment totals
-- `/id`: your Telegram ID (for `APPROVER_IDS`)
+**Daily reminder.** At 10:00 Tehran time the bot posts a reminder in each group whose client owes us.
 
-## Broadcasting (private chat with the bot, `APPROVER_IDS` only)
+### Commands
 
-- `/broadcast`: the bot asks for a message. Send text, a photo, a file or a video, and it's copied as-is, formatting included. You get a confirmation with the group count, then a report showing sent and failed groups, with a **🗑 حذف از همه گروه‌ها** button (Telegram allows deleting within 48h). You can also reply to an existing message with `/broadcast`.
-- `/groups`: the groups the bot is in (👑 admin, 👤 member).
-- `/cancel`: abort a pending broadcast.
+- Groups: `/deals [n]` (last n deals, default 15), `/balance`, `/help`, `/id`
+- Private chat, admins only: `/app` (open the Mini App), `/broadcast` (send a message to every group; text, photo, file or video; has a delete-everywhere button), `/groups` (the groups the bot is in), `/cancel` (abort a pending broadcast)
 
-Broadcasting is disabled while `APPROVER_IDS` is empty. A private chat has no admins to check, so leaving it open would let anyone message every client group.
+Broadcast is admin-only. There is no "anyone" fallback.
 
-Telegram has no API to list a bot's groups, so the bot records them in the `chats` table. Entries come from join, leave and promote events and from any message it sees. At startup it adds groups from past deals and rechecks its status in each one. Groups that removed the bot are skipped, and a group upgraded to a supergroup keeps its deals. Every broadcast and each per-group delivery is stored in `broadcasts` / `broadcast_messages`.
+### Mini App
 
-## Deal lifecycle
+Opened from the bot's menu button or `/app`. Tabs: **داشبورد** (totals and KPIs), **مشتری‌ها** (accounts, balances), **معاملات** (deals with approve/reject/cancel), **تنظیمات** (admins and settings).
 
-`pending` → ✅ `approved` (written to the sheet) → 🚫 `cancelled` (asks for confirmation and sets the sheet row's status to «لغو شده»)
-`pending` → ❌ `rejected` | 🚫 `cancelled` (the creator or an approver can cancel)
+The Mini App is served from `*.workers.dev`, which is usually filtered in Iran, so admins need a VPN to open it. The bot itself works without one.
 
-Approve, reject and cancel-after-approval are limited to `APPROVER_IDS`. If that's empty, any group admin can do them.
+## Setup
 
-## Deployment (pingi-stage)
-
-The bot lives in `/opt/acc-bot` as its own compose stack. Telegram is blocked from that host, so the bot joins `pingi-bot_botnet` and uses pingi-bot's sing-box container `pingi-xray` as `socks5h://pingi-xray:1080`. If pingi-bot's stack is down, this bot can't reach Telegram.
+Needs Node 22+ (wrangler 4 requires it). If npm 10 crashes on peer dependencies, install with `npx npm@11 install`.
 
 ```
-rsync -a --exclude .venv --exclude __pycache__ ./ pingi-stage:/opt/acc-bot/
-ssh pingi-stage 'cd /opt/acc-bot && docker compose up -d --build && docker compose logs -f bot'
+npx wrangler login
+# the D1 database `acc-bot` already exists (id in wrangler.jsonc); on a fresh account: npx wrangler d1 create acc-bot
+npm run db:migrate
+npx wrangler secret put BOT_TOKEN
+npx wrangler secret put GEMINI_API_KEY
+npx wrangler secret put WEBHOOK_SECRET      # random string, 32+ chars
+npx wrangler secret put ADMIN_IDS           # comma-separated Telegram user ids
+npm run deploy
+curl -X POST -H "X-Telegram-Bot-Api-Secret-Token: <WEBHOOK_SECRET>" https://acc-bot.<subdomain>.workers.dev/setup
 ```
 
-The DB lives on the `acc-bot_accdata` volume at `/data/deals.db`.
+`/setup` calls `getMe`, registers the webhook, the command lists and the Mini App menu button, and stores the bot id, username and public URL. Re-run it after changing the URL or the secret. The response should show `webhook: true`. `GET /health/prices` checks the price sources.
 
-### Google Sheets
+Get your Telegram id with `/id` in a private chat with the bot.
 
-1. In Google Cloud, enable the **Google Sheets API**, create a **Service Account**, and download its JSON key.
-2. Copy the key to `pingi-stage:/opt/acc-bot/secrets/credentials.json`.
-3. Share the sheet (Editor) with the service account's `client_email`.
-4. Set `SHEET_ID` in `/opt/acc-bot/.env`, then run `docker compose up -d`.
-
-The `Deals` tab, its Persian header row and right-to-left layout are created automatically.
-
-## Tests
+## Development
 
 ```
-docker run --rm acc-bot-bot sh -c "pip install -q pytest && python -m pytest -q tests"
+npm test                                          # Vitest + @cloudflare/vitest-plugin, runs against a local D1
+npx vitest run test/parser.test.ts -t "<name>"    # a single test
+npx tsc --noEmit                                  # typecheck
+npm run dev                                       # wrangler dev; copy .dev.vars.example to .dev.vars and fill it in
 ```
