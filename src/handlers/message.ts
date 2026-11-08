@@ -11,12 +11,14 @@ import {
   findByCardMessage, getAccount, getByCode, getSetting, isAdmin, listAccounts, recent, setBatch,
   setCardMessage, tradeToJson,
 } from "../db";
-import { type Action, deviationPct, expandRateShorthand, toAction } from "../intent";
+import {
+  type Action, DEFAULT_DEVIATION_PCT, deviationPct, expandRateShorthand, parseDeviationSetting, toAction,
+} from "../intent";
 import { BUSY_TEXT, CLIENT_WRITE_REFUSALS, ORDINARY_LINES, pick } from "../jokes";
 import { allocate, openDeals, summarize } from "../ledger";
 import { normalize, parseAmountText } from "../money";
 import type { NluInput, NluOutput } from "../nlu";
-import { fromToman, parseMessage, TradeError } from "../parser";
+import { applyTradeEdit, parseMessage, TradeError } from "../parser";
 import { type CoinQuote, fetchCoinUsdt, fetchUsdtToman, type UsdtPrice } from "../prices";
 import { isPayment, type Trade } from "../trade";
 
@@ -117,7 +119,7 @@ export async function handleMessage(app: App, msg: Message, text: string): Promi
     usdt,
     account,
     humor: inGroup ? (account?.humorOn ?? true) : true,
-    alertPct: new Decimal(devSetting ?? "3"),
+    alertPct: parseDeviationSetting(devSetting) ?? new Decimal(DEFAULT_DEVIATION_PCT),
   };
   const defaultAsset = app.env.DEFAULT_ASSET || "USDT";
 
@@ -335,16 +337,7 @@ async function edit(
     rate = expandRateShorthand(raw ?? rate, cur.asset, c.usdt?.latest ?? null);
   }
 
-  const next: Trade = {
-    ...cur,
-    amount: ch.amount ?? cur.amount,
-    rate: rate ?? cur.rate,
-    note: ch.note ?? cur.note,
-  };
-  if (cur.tomanTotal !== null) {
-    if (ch.amount !== undefined) next.tomanTotal = null; // a new asset amount replaces the toman figure
-    else if (rate !== undefined) next.amount = fromToman(cur.tomanTotal, rate, cur.asset);
-  }
+  const next = applyTradeEdit(cur, { amount: ch.amount, rate, note: ch.note });
 
   const id = await createPendingAction(app.db, {
     chatId: c.chatId,

@@ -128,3 +128,21 @@ export function parsePayment(text: string): Trade | null {
 export function parseMessage(text: string, defaultAsset = "USDT"): Trade | null {
   return parseTrade(text, defaultAsset) ?? parsePayment(text);
 }
+
+/**
+ * The trade after an edit. A toman-denominated deal keeps its exact toman figure: a new rate
+ * recomputes the asset amount, while a new asset amount replaces the toman figure.
+ */
+export function applyTradeEdit(cur: Trade, ch: { amount?: Decimal; rate?: Decimal; note?: string }): Trade {
+  const next: Trade = {
+    ...cur,
+    amount: ch.amount ?? cur.amount,
+    rate: ch.rate ?? cur.rate,
+    note: ch.note ?? cur.note,
+  };
+  if (cur.tomanTotal !== null) {
+    if (ch.amount !== undefined) next.tomanTotal = null;
+    else if (ch.rate !== undefined) next.amount = fromToman(cur.tomanTotal, ch.rate, cur.asset);
+  }
+  return next;
+}

@@ -125,3 +125,13 @@ export function toAction(o: NluOutput, ctx: IntentCtx): Action {
       return reply(o.reply?.trim() || UNCLEAR);
   }
 }
+
+export const DEFAULT_DEVIATION_PCT = 3;
+
+/** A stored/entered deviation threshold: a positive plain decimal (Persian digits ok), else null. */
+export function parseDeviationSetting(raw: string | null | undefined): Decimal | null {
+  const s = normalize(raw ?? "").trim();
+  if (!/^\d+(\.\d+)?$/.test(s)) return null;
+  const v = new Decimal(s);
+  return v.gt(0) ? v : null;
+}

@@ -167,9 +167,9 @@ describe("worker routes", () => {
     await Promise.all(waits);
   });
 
-  test("/api/* is a 404 stub", async () => {
+  test("/api/* requires Mini App auth", async () => {
     const res = await worker.fetch(R("https://x.dev/api/foo"), testEnv, ctx);
-    expect(res.status).toBe(404);
+    expect(res.status).toBe(401);
   });
 
   test("setup stores bot info and public_url", async () => {

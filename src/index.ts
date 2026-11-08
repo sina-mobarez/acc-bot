@@ -4,6 +4,7 @@ import { nowTehran } from "./app";
 import { runCron } from "./cron";
 import { parseAdminIds, setSetting } from "./db";
 import { handleUpdate } from "./handlers/update";
+import { handleApi } from "./miniapp/api";
 import { createGeminiNlu } from "./nlu";
 import { fetchCoinUsdt, fetchUsdtToman } from "./prices";
 import { createTg } from "./telegram";
@@ -100,7 +101,7 @@ export default {
       }
     }
 
-    if (pathname.startsWith("/api/")) return new Response("not found", { status: 404 }); // Task 13
+    if (pathname.startsWith("/api/")) return handleApi(makeApp(env, ctx), req);
 
     return env.ASSETS.fetch(req);
   },

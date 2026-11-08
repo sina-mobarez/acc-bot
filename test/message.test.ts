@@ -136,6 +136,19 @@ describe("fast path", () => {
     }
   });
 
+  test("an unparseable deviation_pct falls back to 3 instead of crashing (R20)", async () => {
+    await setSetting(db, "deviation_pct", "garbage");
+    try {
+      const chat = freshGroup();
+      const a = app(nlu({ intent: "create_trade", joke: "x" }));
+      const m = msg(chat, ADMIN, "#فروش ۱۰۰ تتر ۲۷۹۳۰۰");
+      await handleMessage(a, m, m.text!);
+      expect(await recent(db, chat.id, 5)).toHaveLength(1);
+    } finally {
+      await setSetting(db, "deviation_pct", "3");
+    }
+  });
+
   test("humor off: no joke and no Gemini call", async () => {
     const chat = freshGroup();
     await upsertAccount(db, { chatId: chat.id, title: chat.title, type: chat.type, at: FIXED_NOW });

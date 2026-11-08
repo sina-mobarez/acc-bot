@@ -17,9 +17,9 @@ const NOT_ALLOWED = "شما اجازه این کار را ندارید.";
 const ALREADY = "این مورد قبلاً بررسی شده است.";
 const NOT_FOUND = "این مورد پیدا نشد.";
 const NOT_EDITABLE = "این مورد دیگر قابل ویرایش نیست.";
-const STALE_SETTLEMENT =
+export const STALE_SETTLEMENT =
   "معامله‌ی مرتبط قبلاً (به‌طور کامل یا جزئی) تسویه شده است؛ این تسویه رد شد. در صورت نیاز دوباره تسویه را صادر کنید.";
-const UNLINKED_NOTE = "پرداخت‌های مرتبط باقی ماندند و به حساب کلی برگشتند";
+export const UNLINKED_NOTE = "پرداخت‌های مرتبط باقی ماندند و به حساب کلی برگشتند";
 
 const who = (u: User): string =>
   u.username ? `@${u.username}` : [u.first_name, u.last_name].filter(Boolean).join(" ");
@@ -74,7 +74,7 @@ async function showCard(c: Ctx, entry: Entry, extra = "", confirmCancel = false)
 }
 
 /** R18: every payment of a settlement batch must still fit in its deal's matching leg. */
-async function settlementStillValid(app: App, chatId: number, batch: Entry[]): Promise<boolean> {
+export async function settlementStillValid(app: App, chatId: number, batch: Entry[]): Promise<boolean> {
   // Sum the batch per (deal, asset, direction): several payments may hit the same leg.
   const needed = new Map<string, { dealId: number; asset: string; dir: string; sum: Decimal }>();
   for (const p of batch) {
@@ -93,23 +93,57 @@ async function settlementStillValid(app: App, chatId: number, batch: Entry[]): P
   });
 }
 
-async function decide(c: Ctx, entry: Entry, to: "approved" | "rejected"): Promise<void> {
-  const { app } = c;
+export type DecideResult = "done" | "already" | "stale";
+
+/**
+ * Approve or reject an entry together with its settlement batch (all or nothing). An approval
+ * whose settlement no longer fits (R18) rejects the batch instead and returns "stale".
+ * Shared by the Telegram buttons and the Mini App API.
+ */
+export async function decideEntry(
+  app: App, entry: Entry, to: "approved" | "rejected", actor: string,
+): Promise<DecideResult> {
   const batch = entry.batchId ? await entriesInBatch(app.db, entry.batchId) : [entry];
   const ids = batch.map((e) => e.id);
-  const fields = { decidedBy: c.actor, decidedAt: app.now() };
+  const fields = { decidedBy: actor, decidedAt: app.now() };
 
   if (
     to === "approved" &&
     batch.every((e) => e.status === "pending") &&
-    !(await settlementStillValid(app, c.chatId, batch))
+    !(await settlementStillValid(app, entry.chatId, batch))
   ) {
-    if (await transition(app.db, ids, "pending", "rejected", fields)) await showCard(c, entry);
-    return answer(app, c.q, STALE_SETTLEMENT, true);
+    await transition(app.db, ids, "pending", "rejected", fields);
+    return "stale";
   }
-  if (!(await transition(app.db, ids, "pending", to, fields))) return answer(app, c.q, ALREADY, true);
+  return (await transition(app.db, ids, "pending", to, fields)) ? "done" : "already";
+}
+
+async function decide(c: Ctx, entry: Entry, to: "approved" | "rejected"): Promise<void> {
+  const { app } = c;
+  const r = await decideEntry(app, entry, to, c.actor);
+  if (r === "already") return answer(app, c.q, ALREADY, true);
   await showCard(c, entry);
+  if (r === "stale") return answer(app, c.q, STALE_SETTLEMENT, true);
   await answer(app, c.q);
+}
+
+/** Cancel a pending entry (and its whole settlement batch). False if it was no longer pending. */
+export async function cancelPending(app: App, entry: Entry, actor: string): Promise<boolean> {
+  const ids = (entry.batchId ? await entriesInBatch(app.db, entry.batchId) : [entry]).map((e) => e.id);
+  const at = app.now();
+  return ids.length === 1
+    ? cancelEntry(app.db, entry.id, "pending", actor, at)
+    : transition(app.db, ids, "pending", "cancelled", { cancelledBy: actor, cancelledAt: at });
+}
+
+/** Cancel an approved entry; approved payments linked to a cancelled deal fall back to FIFO. */
+export async function cancelApproved(
+  app: App, entry: Entry, actor: string,
+): Promise<{ ok: boolean; unlinked: number }> {
+  // cancelEntry records the 'cancel' event in the same batch as the status change.
+  if (!(await cancelEntry(app.db, entry.id, "approved", actor, app.now()))) return { ok: false, unlinked: 0 };
+  const unlinked = isPayment(entry.trade) ? 0 : await unlinkPayments(app.db, entry.id);
+  return { ok: true, unlinked };
 }
 
 async function cancelRequest(c: Ctx, entry: Entry): Promise<void> {
@@ -119,25 +153,17 @@ async function cancelRequest(c: Ctx, entry: Entry): Promise<void> {
     return answer(app, c.q);
   }
   if (entry.status !== "pending") return answer(app, c.q, ALREADY, true);
-  const ids = (entry.batchId ? await entriesInBatch(app.db, entry.batchId) : [entry]).map((e) => e.id);
-  const at = app.now();
-  const ok =
-    ids.length === 1
-      ? await cancelEntry(app.db, entry.id, "pending", c.actor, at)
-      : await transition(app.db, ids, "pending", "cancelled", { cancelledBy: c.actor, cancelledAt: at });
-  if (!ok) return answer(app, c.q, ALREADY, true);
+  if (!(await cancelPending(app, entry, c.actor))) return answer(app, c.q, ALREADY, true);
   await showCard(c, entry);
   await answer(app, c.q);
 }
 
 async function cancelConfirm(c: Ctx, entry: Entry): Promise<void> {
   const { app } = c;
-  // cancelEntry records the 'cancel' event in the same batch as the status change.
-  if (!(await cancelEntry(app.db, entry.id, "approved", c.actor, app.now()))) {
-    return answer(app, c.q, ALREADY, true);
-  }
+  const { ok, unlinked } = await cancelApproved(app, entry, c.actor);
+  if (!ok) return answer(app, c.q, ALREADY, true);
   const lines: string[] = [];
-  if (!isPayment(entry.trade) && (await unlinkPayments(app.db, entry.id)) > 0) lines.push(`ℹ️ ${UNLINKED_NOTE}`);
+  if (unlinked > 0) lines.push(`ℹ️ ${UNLINKED_NOTE}`);
   const owed = debts(summarize((await approvedLedger(app.db, c.chatId)).map((l) => l.trade)));
   lines.push("🧮 <b>مانده حساب پس از لغو</b>");
   lines.push(...(owed.every(([, v]) => v.isZero()) ? ["✅ حساب کاملاً تسویه است."] : owed.map(([a, v]) => debtLine(a, v))));
