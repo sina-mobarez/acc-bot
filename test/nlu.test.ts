@@ -5,7 +5,7 @@ import { fakeFetch } from "./fakes";
 const input: NluInput = { text: "۱۰۰ تتر خریدم", role: "admin", chat: "group", openDeals: [] };
 const HOST = "generativelanguage.googleapis.com";
 const candidate = (text: string) => ({ candidates: [{ content: { parts: [{ text }] } }] });
-const nlu = (routes: Record<string, unknown>) => createGeminiNlu("KEY", "gemini-flash-latest", fakeFetch(routes));
+const nlu = (routes: Record<string, unknown>) => createGeminiNlu("KEY", "gemini-3.5-flash-lite", fakeFetch(routes));
 
 describe("gemini nlu", () => {
   test("valid candidate -> parsed output (nulls dropped)", async () => {

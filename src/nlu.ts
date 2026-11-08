@@ -177,13 +177,24 @@ export function createGeminiNlu(apiKey: string, model: string, f: typeof fetch):
             signal: AbortSignal.timeout(TIMEOUT_MS),
           },
         );
-        if (res.status !== 200) return null;
+        if (res.status !== 200) {
+          console.warn("gemini: HTTP", res.status, (await res.text().catch(() => "")).slice(0, 500));
+          return null;
+        }
         const data = (await res.json()) as any;
         const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
-        if (typeof text !== "string") return null;
+        if (typeof text !== "string") {
+          console.warn("gemini: no candidate text", JSON.stringify(data).slice(0, 500));
+          return null;
+        }
         const parsed = stripNulls(JSON.parse(text));
-        return isNluOutput(parsed) ? clampNluOutput(parsed) : null;
-      } catch {
+        if (!isNluOutput(parsed)) {
+          console.warn("gemini: output failed validation", text.slice(0, 500));
+          return null;
+        }
+        return clampNluOutput(parsed);
+      } catch (e) {
+        console.warn("gemini: request failed", String(e));
         return null;
       }
     },

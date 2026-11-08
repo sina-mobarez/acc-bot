@@ -13,5 +13,5 @@
   ],
   "assets": { "directory": "public", "binding": "ASSETS" },
   "triggers": { "crons": ["* * * * *"] },
-  "vars": { "GEMINI_MODEL": "gemini-flash-latest", "DEFAULT_ASSET": "USDT" }
+  "vars": { "GEMINI_MODEL": "gemini-3.5-flash-lite", "DEFAULT_ASSET": "USDT" }
 }
