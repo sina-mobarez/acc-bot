@@ -290,6 +290,15 @@ export async function cancelEntry(
   return upd.meta.changes === 1;
 }
 
+/** Detach approved payments from a (cancelled) deal; they fall back to FIFO. Returns how many. */
+export async function unlinkPayments(db: D1Database, dealId: number): Promise<number> {
+  const res = await db
+    .prepare("UPDATE entries SET linked_deal_id = NULL WHERE linked_deal_id = ? AND status = 'approved'")
+    .bind(dealId)
+    .run();
+  return res.meta.changes;
+}
+
 export async function recent(db: D1Database, chatId: number, limit: number): Promise<Entry[]> {
   const { results } = await db
     .prepare("SELECT * FROM entries WHERE chat_id = ? ORDER BY id DESC LIMIT ?")

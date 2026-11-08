@@ -24,6 +24,7 @@ import {
   takePendingAction,
   tradeToJson,
   transition,
+  unlinkPayments,
   updateAccount,
   upsertAccount,
 } from "../src/db";
@@ -223,5 +224,18 @@ describe("admins and bookkeeping", () => {
     const got = await takePendingAction(db, id, "applied");
     expect(got!.payload).toEqual({ a: 1 });
     expect(await takePendingAction(db, id, "discarded")).toBeNull();
+  });
+});
+
+describe("unlinkPayments", () => {
+  test("detaches approved payments only", async () => {
+    const chat = freshChat();
+    const d = await mk(chat);
+    const pay = trade({ side: "RECEIVE", rate: null });
+    const approved = await mk(chat, pay, { linkedDealId: d.id, status: "approved" });
+    const pending = await mk(chat, pay, { linkedDealId: d.id });
+    expect(await unlinkPayments(db, d.id)).toBe(1);
+    expect((await getEntry(db, approved.id))!.linkedDealId).toBeNull();
+    expect((await getEntry(db, pending.id))!.linkedDealId).toBe(d.id);
   });
 });

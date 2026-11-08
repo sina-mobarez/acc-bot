@@ -145,7 +145,9 @@ function tradeLine(t: Trade): string {
 
 /** A deal together with the payments recorded alongside it, as one card for one decision. */
 export function renderSettlement(deal: Entry, payments: Entry[]): string {
-  const [statusIcon, status] = STATUS[deal.status];
+  // The batch is decided as one: its status is the payments' status, not the (already approved) deal's.
+  const head = payments[0] ?? deal;
+  const [statusIcon, status] = STATUS[head.status];
   const lines = [
     `🧾 <b>معامله و تسویه</b>`,
     `🆔 <code>${deal.code}</code>`,
@@ -158,9 +160,9 @@ export function renderSettlement(deal: Entry, payments: Entry[]): string {
   lines.push(LINE, `🕒 ${jalali(deal.createdAt)}`, `✍️ ثبت توسط ${escapeHtml(deal.createdBy)}`);
   if (deal.joke) lines.push("", `<i>${escapeHtml(deal.joke)}</i>`);
   lines.push("", `${statusIcon} <b>وضعیت: ${status}</b>`);
-  if (deal.status !== "pending" && deal.decidedBy && deal.decidedAt) {
-    const verb = deal.status === "rejected" ? "رد" : "تایید";
-    lines.push(`<i>${verb} توسط ${escapeHtml(deal.decidedBy)} · ${jalali(deal.decidedAt)}</i>`);
+  if (head.status !== "pending" && head.decidedBy && head.decidedAt) {
+    const verb = head.status === "rejected" ? "رد" : "تایید";
+    lines.push(`<i>${verb} توسط ${escapeHtml(head.decidedBy)} · ${jalali(head.decidedAt)}</i>`);
   }
   return lines.join("\n");
 }
@@ -208,7 +210,7 @@ export function renderList(name: string, entries: Entry[]): string {
   return lines.join("\n");
 }
 
-function debtLine(asset: string, owed: Decimal): string {
+export function debtLine(asset: string, owed: Decimal): string {
   const name = escapeHtml(assetName(asset));
   if (owed.isZero()) return `✅ ${name}: تسویه`;
   if (owed.gt(0)) return `🔴 ${name}: مشتری <b>${fa(owed)}</b> ${name} به ما بدهکار است`;

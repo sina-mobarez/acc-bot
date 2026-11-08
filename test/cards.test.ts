@@ -8,6 +8,7 @@ import {
   renderEntry,
   renderList,
   renderReminder,
+  renderSettlement,
   settlementKeyboard,
 } from "../src/cards";
 import { dealCode, type Entry } from "../src/db";
@@ -192,5 +193,24 @@ describe("FakeTg", () => {
     tg.fail("sendMessage", 9, new TgError(403, "blocked"));
     await expect(tg.call("sendMessage", { chat_id: 9 })).rejects.toBeInstanceOf(TgError);
     expect(tg.calls).toHaveLength(4);
+  });
+});
+
+describe("renderSettlement", () => {
+  const payment = (over: Partial<Entry> = {}) =>
+    entry({ id: 8, trade: trade({ side: "RECEIVE", rate: null }), linkedDealId: 7, ...over });
+  const deal = entry({ status: "approved", decidedBy: "Boss", decidedAt: "2026-10-17T19:00:00+03:30" });
+
+  it("shows the payments' status, not the deal's", () => {
+    const out = renderSettlement(deal, [payment()]);
+    expect(out).toContain("در انتظار تایید");
+    expect(out).not.toContain("توسط Boss");
+  });
+  it("shows approved and rejected payments with who decided", () => {
+    const decided = { decidedBy: "Sina", decidedAt: "2026-10-17T20:00:00+03:30" };
+    expect(renderSettlement(deal, [payment({ status: "approved", ...decided })])).toContain("تایید شد");
+    const rejected = renderSettlement(deal, [payment({ status: "rejected", ...decided })]);
+    expect(rejected).toContain("رد شد");
+    expect(rejected).toContain("رد توسط Sina");
   });
 });
