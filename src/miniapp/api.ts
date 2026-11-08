@@ -299,7 +299,13 @@ async function decide({ app, actor }: Ctx, id: number, to: "approved" | "rejecte
   if (r === "already") throw conflict("این مورد قبلاً بررسی شده است.");
   const fresh = await refreshCard(app, id);
   if (fresh.cardMsgId === null) {
-    await notifyChange(app, fresh, panelNotice(fresh, to === "approved" ? "✅ <b>تایید از پنل مدیریت</b>" : "❌ <b>رد از پنل مدیریت</b>"));
+    const title =
+      r === "stale"
+        ? "❌ <b>تسویه منقضی بود و از پنل مدیریت رد شد</b>"
+        : to === "approved"
+          ? "✅ <b>تایید از پنل مدیریت</b>"
+          : "❌ <b>رد از پنل مدیریت</b>";
+    await notifyChange(app, fresh, panelNotice(fresh, title));
   }
   if (r === "stale") throw conflict(STALE_SETTLEMENT);
   return { entry: entryJson(fresh) };

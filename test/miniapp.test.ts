@@ -245,8 +245,13 @@ describe("entries", () => {
     const q1 = await mk(chat, pay({ amount: D(100) }), { linkedDealId: d2.id, batchId: "b2" });
     const q2 = await mk(chat, pay({ amount: D(100) }), { linkedDealId: d2.id, batchId: "b3" });
     expect((await call(app, "POST", `/api/entries/${q1.id}/approve`)).status).toBe(200);
+    app.tg.calls.length = 0;
     const stale = await call(app, "POST", `/api/entries/${q2.id}/approve`);
     expect(stale.status).toBe(409);
+    const notice = app.tg.calls.filter((c) => c.method === "sendMessage").map((c) => String(c.params.text));
+    expect(notice).toHaveLength(1);
+    expect(notice[0]).toContain("رد شد");
+    expect(notice[0]).not.toContain("تایید از پنل");
     expect((await getEntry(db, q2.id))?.status).toBe("rejected");
   });
 
