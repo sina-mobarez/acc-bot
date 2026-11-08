@@ -20,6 +20,9 @@ export function fakeFetch(routes: FakeRoutes): typeof fetch {
   }) as typeof fetch;
 }
 
+import { env } from "cloudflare:workers";
+import type { App } from "../src/app";
+import type { Nlu, NluInput, NluOutput } from "../src/nlu";
 import type { Tg } from "../src/telegram";
 
 /** Scriptable Telegram: records calls, default result `{ message_id: n++ }`. */
@@ -46,4 +49,46 @@ export class FakeTg implements Tg {
     if (h) return (await h(params)) as T;
     return { message_id: this.nextId++ } as T;
   }
+}
+
+/** Scripted NLU: returns queued outputs in order (null once exhausted) and records inputs. */
+export class FakeNlu implements Nlu {
+  inputs: NluInput[] = [];
+  private script: (NluOutput | null)[];
+  constructor(...script: (NluOutput | null)[]) {
+    this.script = script;
+  }
+  async understand(i: NluInput): Promise<NluOutput | null> {
+    this.inputs.push(i);
+    return this.script.length > 0 ? this.script.shift()! : null;
+  }
+}
+
+export interface TestApp extends App {
+  tg: FakeTg;
+  nlu: FakeNlu;
+  /** Await every promise passed to `defer` (including ones deferred while flushing). */
+  flush(): Promise<void>;
+}
+
+export const FIXED_NOW = "2026-11-08T12:00:00+03:30";
+
+export function makeApp(overrides: Partial<App> = {}): TestApp {
+  const pending: Promise<unknown>[] = [];
+  return {
+    env,
+    db: env.DB,
+    tg: new FakeTg(),
+    nlu: new FakeNlu(),
+    fetch: fakeFetch({}),
+    now: () => FIXED_NOW,
+    adminIds: new Set([1]),
+    defer: (p) => {
+      pending.push(p);
+    },
+    flush: async () => {
+      while (pending.length > 0) await Promise.allSettled(pending.splice(0));
+    },
+    ...overrides,
+  } as TestApp;
 }
