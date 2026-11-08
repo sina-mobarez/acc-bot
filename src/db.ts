@@ -259,7 +259,10 @@ export async function editEntry(
   return after;
 }
 
-/** Cancel one entry that is currently in `from`; records a cancel event on success. */
+/**
+ * Cancel one entry that is currently in `from`. The UPDATE and its audit event run in one
+ * batch (a transaction); the event row is inserted only if the UPDATE changed a row.
+ */
 export async function cancelEntry(
   db: D1Database,
   id: number,
@@ -267,11 +270,24 @@ export async function cancelEntry(
   actor: string,
   at: string,
 ): Promise<boolean> {
-  const before = await getEntry(db, id);
-  if (!before) return false;
-  const ok = await transition(db, [id], from, "cancelled", { cancelledBy: actor, cancelledAt: at });
-  if (ok) await recordEvent(db, id, "cancel", actor, at, before.trade, null);
-  return ok;
+  const [upd] = await db.batch([
+    db
+      .prepare(
+        "UPDATE entries SET status = 'cancelled', cancelled_by = ?, cancelled_at = ? WHERE id = ? AND status = ?",
+      )
+      .bind(actor, at, id, from),
+    db
+      .prepare(
+        `INSERT INTO entry_events (entry_id, action, actor, at, before_json, after_json)
+         SELECT id, 'cancel', ?, ?,
+           json_object('side', kind, 'amount', amount, 'asset', asset, 'rate', rate,
+                       'note', note, 'tomanTotal', toman_total),
+           NULL
+         FROM entries WHERE id = ? AND changes() = 1`,
+      )
+      .bind(actor, at, id),
+  ]);
+  return upd.meta.changes === 1;
 }
 
 export async function recent(db: D1Database, chatId: number, limit: number): Promise<Entry[]> {

@@ -22,6 +22,7 @@ import {
   recent,
   setSetting,
   takePendingAction,
+  tradeToJson,
   transition,
   updateAccount,
   upsertAccount,
@@ -121,11 +122,14 @@ describe("entries", () => {
     await transition(db, [e.id], "pending", "approved");
     expect(await cancelEntry(db, e.id, "approved", "admin", AT)).toBe(true);
     expect(await cancelEntry(db, e.id, "approved", "admin", AT)).toBe(false);
-    const n = await db
-      .prepare("SELECT COUNT(*) AS n FROM entry_events WHERE entry_id = ?")
+    const evs = await db
+      .prepare("SELECT * FROM entry_events WHERE entry_id = ?")
       .bind(e.id)
-      .first<{ n: number }>();
-    expect(n!.n).toBe(1);
+      .all<Record<string, string | null>>();
+    expect(evs.results).toHaveLength(1);
+    expect(evs.results[0].action).toBe("cancel");
+    expect(JSON.parse(evs.results[0].before_json!)).toEqual(JSON.parse(tradeToJson(e.trade)));
+    expect(evs.results[0].after_json).toBeNull();
     expect((await getEntry(db, e.id))!.cancelledBy).toBe("admin");
   });
 
