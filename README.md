@@ -19,7 +19,7 @@ In a client group, tag `@bot` or reply to one of its messages, then write normal
 
 The old `#` syntax still works and does not need an LLM: `#خرید ۱۰۰ تتر رو قیمت ۲۷۵۰۰۰`, `#فروش ۳۰۰ تتر ۳۲۰۰۰۰`, `#دریافت ۵۰ میلیون تومن`, `#sell 100 usdt @ 320000`. Persian and Arabic digits, `هزار`/`میلیون`/`میلیارد` and `k`/`m`/`b` multipliers are accepted. When `تومان`/`تومن` follows the amount, the amount is in toman and the asset amount is `toman ÷ price`.
 
-A deal card shows the numbers and a comparison with the live Nobitex rate. Admins approve with ✅, reject with ❌ or cancel with 🚫. The creator of a pending deal can withdraw it, and cancelling an approved deal asks for confirmation. Admins can also approve and manage deals from the Mini App.
+A deal card shows the numbers and a comparison with the live Nobitex rate. Admins approve with ✅, reject with ❌ or cancel with 🚫. Only admins can use these buttons, and cancelling an approved deal asks for confirmation. Admins can also approve and manage deals from the Mini App.
 
 **Roles.** Admins are the Telegram user ids in the `ADMIN_IDS` secret plus anyone added in the Mini App. Being a Telegram group admin grants nothing. Everyone else is a client: clients can only ask (balance, deals, prices) about their own chat and can't create, edit, settle or cancel anything. A client attempting a trade is refused. An edit is a proposal with its own ✅ button; applying it changes only the fields it asked for, on top of any edits made since.
 
