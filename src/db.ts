@@ -373,6 +373,7 @@ export interface Account {
   remindersOn: boolean;
   humorOn: boolean;
   archived: boolean;
+  activated: boolean;
   remindedOn: string | null;
   updatedAt: string;
 }
@@ -388,6 +389,7 @@ const accountFromRow = (r: Row): Account => ({
   remindersOn: Number(r.reminders_on) === 1,
   humorOn: Number(r.humor_on) === 1,
   archived: Number(r.archived) === 1,
+  activated: Number(r.activated) === 1,
   remindedOn: str(r.reminded_on),
   updatedAt: String(r.updated_at),
 });
@@ -399,35 +401,42 @@ const REMINDERS_DEFAULT_SQL =
   "COALESCE((SELECT CASE value WHEN '0' THEN 0 ELSE 1 END FROM settings WHERE key = 'reminders_default'), 1)";
 
 /**
- * Record a group as the bot sees it. A new account's reminders_on follows the reminders_default setting. Without `botStatus`, seeing the chat means the bot is a
- * member: a first insert gets 'member', an existing admin status is kept, and left/kicked revive.
+ * Record a group as the bot sees it, and return whether it is an activated client account.
+ * - A new account's reminders_on follows the reminders_default setting.
+ * - Without `botStatus`, seeing the chat means the bot is a member: a first insert gets 'member',
+ *   an existing admin status is kept, and left/kicked revive.
+ * - `activated: true` (an admin spoke or acted there) activates it for good; it never deactivates.
  */
 export async function upsertAccount(
   db: D1Database,
-  a: { chatId: number; title: string; type: string; at: string; botStatus?: string },
-): Promise<void> {
-  if (a.botStatus === undefined) {
-    await db
-      .prepare(
-        `INSERT INTO accounts (chat_id, title, type, bot_status, updated_at, reminders_on)
-         VALUES (?, ?, ?, 'member', ?, ${REMINDERS_DEFAULT_SQL})
-         ON CONFLICT (chat_id) DO UPDATE SET title = excluded.title, type = excluded.type,
-           updated_at = excluded.updated_at,
-           bot_status = CASE WHEN accounts.bot_status IN ('left', 'kicked') THEN 'member' ELSE accounts.bot_status END`,
-      )
-      .bind(a.chatId, a.title, a.type, a.at)
-      .run();
-  } else {
-    await db
-      .prepare(
-        `INSERT INTO accounts (chat_id, title, type, bot_status, updated_at, reminders_on)
-         VALUES (?, ?, ?, ?, ?, ${REMINDERS_DEFAULT_SQL})
-         ON CONFLICT (chat_id) DO UPDATE SET title = excluded.title, type = excluded.type,
-           bot_status = excluded.bot_status, updated_at = excluded.updated_at`,
-      )
-      .bind(a.chatId, a.title, a.type, a.botStatus, a.at)
-      .run();
-  }
+  a: { chatId: number; title: string; type: string; at: string; botStatus?: string; activated?: boolean },
+): Promise<{ activated: boolean }> {
+  const act = a.activated ? 1 : 0;
+  const r =
+    a.botStatus === undefined
+      ? await db
+          .prepare(
+            `INSERT INTO accounts (chat_id, title, type, bot_status, updated_at, reminders_on, activated)
+             VALUES (?, ?, ?, 'member', ?, ${REMINDERS_DEFAULT_SQL}, ?)
+             ON CONFLICT (chat_id) DO UPDATE SET title = excluded.title, type = excluded.type,
+               updated_at = excluded.updated_at, activated = MAX(accounts.activated, excluded.activated),
+               bot_status = CASE WHEN accounts.bot_status IN ('left', 'kicked') THEN 'member' ELSE accounts.bot_status END
+             RETURNING activated`,
+          )
+          .bind(a.chatId, a.title, a.type, a.at, act)
+          .first<Row>()
+      : await db
+          .prepare(
+            `INSERT INTO accounts (chat_id, title, type, bot_status, updated_at, reminders_on, activated)
+             VALUES (?, ?, ?, ?, ?, ${REMINDERS_DEFAULT_SQL}, ?)
+             ON CONFLICT (chat_id) DO UPDATE SET title = excluded.title, type = excluded.type,
+               bot_status = excluded.bot_status, updated_at = excluded.updated_at,
+               activated = MAX(accounts.activated, excluded.activated)
+             RETURNING activated`,
+          )
+          .bind(a.chatId, a.title, a.type, a.botStatus, a.at, act)
+          .first<Row>();
+  return { activated: Number(r?.activated) === 1 };
 }
 
 export async function getAccount(db: D1Database, chatId: number): Promise<Account | null> {
@@ -435,11 +444,15 @@ export async function getAccount(db: D1Database, chatId: number): Promise<Accoun
   return r ? accountFromRow(r) : null;
 }
 
+/**
+ * Client accounts, i.e. activated groups only (a group an admin never spoke in is not a client).
+ * `activeOnly` also drops groups the bot left or was removed from.
+ */
 export async function listAccounts(
   db: D1Database,
   opts: { activeOnly?: boolean; includeArchived?: boolean } = {},
 ): Promise<Account[]> {
-  const where: string[] = [];
+  const where: string[] = ["activated = 1"];
   const values: string[] = [];
   if (opts.activeOnly) {
     where.push(`bot_status IN (${ACTIVE_BOT_STATUSES.map(() => "?").join(",")})`);
@@ -740,7 +753,7 @@ const broadcastFromRow = (r: Row): Broadcast => ({
   statusMsgId: num(r.status_msg_id),
 });
 
-/** A new broadcast (status 'sending') with a queued row for every active, non-archived account. */
+/** A new broadcast (status 'sending') with a queued row for every active, activated, non-archived account. */
 export async function createBroadcast(
   db: D1Database,
   b: {
@@ -766,7 +779,7 @@ export async function createBroadcast(
     .prepare(
       `INSERT INTO broadcast_messages (broadcast_id, chat_id)
        SELECT ?, chat_id FROM accounts
-       WHERE bot_status IN (${ACTIVE_BOT_STATUSES.map(() => "?").join(",")}) AND archived = 0`,
+       WHERE bot_status IN (${ACTIVE_BOT_STATUSES.map(() => "?").join(",")}) AND archived = 0 AND activated = 1`,
     )
     .bind(id, ...ACTIVE_BOT_STATUSES)
     .run();

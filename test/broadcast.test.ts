@@ -35,7 +35,7 @@ async function groups(n: number, status = "member"): Promise<number[]> {
   const ids: number[] = [];
   for (let i = 0; i < n; i++) {
     const chatId = -1000 - ids.length - (status === "member" ? 0 : 500);
-    await upsertAccount(db, { chatId, title: `گروه ${chatId}`, type: "supergroup", at: AT, botStatus: status });
+    await upsertAccount(db, { chatId, title: `گروه ${chatId}`, type: "supergroup", at: AT, botStatus: status, activated: true });
     ids.push(chatId);
   }
   return ids;
@@ -167,9 +167,10 @@ describe("broadcast", () => {
   test("kicked/left/archived groups excluded", async () => {
     const [active] = await groups(1);
     await groups(1, "kicked");
-    await upsertAccount(db, { chatId: -3, title: "L", type: "group", at: AT, botStatus: "left" });
-    await upsertAccount(db, { chatId: -4, title: "A", type: "group", at: AT });
+    await upsertAccount(db, { chatId: -3, title: "L", type: "group", at: AT, botStatus: "left", activated: true });
+    await upsertAccount(db, { chatId: -4, title: "A", type: "group", at: AT, activated: true });
     await db.prepare("UPDATE accounts SET archived = 1 WHERE chat_id = -4").run();
+    await upsertAccount(db, { chatId: -5, title: "never activated", type: "group", at: AT }); // no admin spoke there
     const app = makeApp();
     await startBroadcast(app);
     expect(calls(app, "copyMessage").map((c) => c.chat_id)).toEqual([active]);
@@ -309,10 +310,12 @@ describe("broadcast", () => {
 
   test("/groups lists active groups", async () => {
     await groups(2);
+    await upsertAccount(db, { chatId: -6, title: "stranger group", type: "group", at: AT });
     const app = makeApp();
     await onGroupsCommand(app, msg("/groups"));
     const text = String(calls(app, "sendMessage")[0].text);
     expect(text).toContain("۲ گروه");
     expect(text).toContain("گروه -1000");
+    expect(text).not.toContain("stranger group");
   });
 });

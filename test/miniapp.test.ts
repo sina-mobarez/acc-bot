@@ -39,7 +39,7 @@ let nextChat = 9000;
 const freshChat = () => -(++nextChat * 13);
 const newAccount = async (title = "علی") => {
   const chatId = freshChat();
-  await upsertAccount(db, { chatId, title, type: "supergroup", at: AT });
+  await upsertAccount(db, { chatId, title, type: "supergroup", at: AT, activated: true });
   return chatId;
 };
 const deal = (over: Partial<Trade> = {}): Trade => ({
@@ -136,6 +136,15 @@ describe("dashboard", () => {
 });
 
 describe("accounts", () => {
+  test("groups no admin has spoken in are left out of the accounts list and dashboard", async () => {
+    const chatId = freshChat();
+    await upsertAccount(db, { chatId, title: "غریبه", type: "supergroup", at: AT });
+    const app = appFor();
+    const all = await call(app, "GET", "/api/accounts?archived=1");
+    expect(all.json.accounts.some((a: any) => a.chatId === chatId)).toBe(false);
+    expect(JSON.stringify((await call(app, "GET", "/api/dashboard")).json)).not.toContain("غریبه");
+  });
+
   test("list hides archived unless asked; detail has owed, open deals and entries; patch updates", async () => {
     const chat = await newAccount("رضا");
     const d = await approved(chat, deal());

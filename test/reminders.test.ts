@@ -19,7 +19,7 @@ beforeEach(async () => {
 });
 
 async function account(chatId: number, title = "گروه") {
-  await upsertAccount(db, { chatId, title, type: "supergroup", at: AT });
+  await upsertAccount(db, { chatId, title, type: "supergroup", at: AT, activated: true });
 }
 
 async function deal(chatId: number, side: Side, amount: number, rate: number | null, asset = "USDT") {
@@ -120,12 +120,14 @@ describe("runReminders", () => {
     expect((await getAccount(db, -100999))?.remindedOn).toBe("2026-11-08");
   });
 
-  test("reminders_off and archived are skipped", async () => {
+  test("reminders_off, archived and non-activated accounts are skipped", async () => {
     await debtor(-1001);
     await debtor(-1002);
     await debtor(-1003);
+    await debtor(-1004);
     await updateAccount(db, -1002, { remindersOn: false });
     await updateAccount(db, -1003, { archived: true });
+    await db.prepare("UPDATE accounts SET activated = 0 WHERE chat_id = -1004").run();
     const app = makeApp();
     await runReminders(app, NOON);
     expect(sent(app).map((p) => p.chat_id)).toEqual([-1001]);

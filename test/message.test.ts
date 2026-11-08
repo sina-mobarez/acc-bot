@@ -152,7 +152,7 @@ describe("fast path", () => {
 
   test("humor off: no joke and no Gemini call", async () => {
     const chat = freshGroup();
-    await upsertAccount(db, { chatId: chat.id, title: chat.title, type: chat.type, at: FIXED_NOW });
+    await upsertAccount(db, { chatId: chat.id, title: chat.title, type: chat.type, at: FIXED_NOW, activated: true });
     await db.prepare("UPDATE accounts SET humor_on = 0 WHERE chat_id = ?").bind(chat.id).run();
     const a = app(nlu({ intent: "create_trade", joke: "x" }));
     const m = msg(chat, ADMIN, "#فروش ۱۰۰ تتر ۲۷۹۳۰۰");
@@ -248,8 +248,8 @@ describe("queries", () => {
   test("client balance ignores client_hint", async () => {
     const chatA = freshGroup();
     const chatB = freshGroup();
-    await upsertAccount(db, { chatId: chatA.id, title: "Alpha", type: "supergroup", at: FIXED_NOW });
-    await upsertAccount(db, { chatId: chatB.id, title: "Beta", type: "supergroup", at: FIXED_NOW });
+    await upsertAccount(db, { chatId: chatA.id, title: "Alpha", type: "supergroup", at: FIXED_NOW, activated: true });
+    await upsertAccount(db, { chatId: chatB.id, title: "Beta", type: "supergroup", at: FIXED_NOW, activated: true });
     await approved(chatA.id, trade({ amount: D(10) }));
     await approved(chatB.id, trade({ amount: D(777) }));
 
@@ -264,7 +264,7 @@ describe("queries", () => {
 
   test("admin in group also gets this chat's balance", async () => {
     const chatA = freshGroup();
-    await upsertAccount(db, { chatId: chatA.id, title: "Gamma", type: "supergroup", at: FIXED_NOW });
+    await upsertAccount(db, { chatId: chatA.id, title: "Gamma", type: "supergroup", at: FIXED_NOW, activated: true });
     const a = app(nlu({ intent: "query_balance", client_hint: "Other" }));
     const m = msg(chatA, ADMIN, "حساب");
     await handleMessage(a, m, m.text!);
@@ -274,7 +274,7 @@ describe("queries", () => {
   test("admin private balance by name", async () => {
     const chatA = freshGroup();
     const name = `Zeta${chatA.id}`;
-    await upsertAccount(db, { chatId: chatA.id, title: name, type: "supergroup", at: FIXED_NOW });
+    await upsertAccount(db, { chatId: chatA.id, title: name, type: "supergroup", at: FIXED_NOW, activated: true });
     await approved(chatA.id, trade({ amount: D(42) }));
     const priv = { id: ADMIN.id, type: "private" as const, first_name: "Sina" };
     const a = app(nlu({ intent: "query_balance", client_hint: name }));
@@ -289,8 +289,8 @@ describe("queries", () => {
     const c1 = freshGroup();
     const c2 = freshGroup();
     const tag = `Eta${c1.id}`;
-    await upsertAccount(db, { chatId: c1.id, title: `${tag} one`, type: "supergroup", at: FIXED_NOW });
-    await upsertAccount(db, { chatId: c2.id, title: `${tag} two`, type: "supergroup", at: FIXED_NOW });
+    await upsertAccount(db, { chatId: c1.id, title: `${tag} one`, type: "supergroup", at: FIXED_NOW, activated: true });
+    await upsertAccount(db, { chatId: c2.id, title: `${tag} two`, type: "supergroup", at: FIXED_NOW, activated: true });
     const priv = { id: ADMIN.id, type: "private" as const, first_name: "Sina" };
     const a = app(nlu({ intent: "query_deals", client_hint: tag }, { intent: "query_balance", client_hint: "nobody-xyz" }));
     const m = msg(priv, ADMIN, "معاملات");

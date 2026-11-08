@@ -22,7 +22,7 @@ const sent = (app: ReturnType<typeof makeApp>) =>
   app.tg.calls.filter((c) => c.method === "sendMessage").map((c) => c.params);
 
 async function seed(chatId: number, n: number) {
-  await upsertAccount(db, { chatId, title: "گروه", type: "supergroup", at: AT });
+  await upsertAccount(db, { chatId, title: "گروه", type: "supergroup", at: AT, activated: true });
   const ids: number[] = [];
   for (let i = 0; i < n; i++) {
     const e = await createEntry(db, {

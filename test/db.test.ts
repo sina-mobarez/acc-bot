@@ -171,11 +171,18 @@ describe("accounts", () => {
     expect(a.botStatus).toBe("member");
   });
 
-  test("first insert without botStatus is member and active", async () => {
+  test("first insert without botStatus is member; listed only once activated", async () => {
     const chat = freshChat();
-    await upsertAccount(db, { chatId: chat, title: "New", type: "group", at: AT });
+    expect(await upsertAccount(db, { chatId: chat, title: "New", type: "group", at: AT })).toEqual({ activated: false });
     expect((await getAccount(db, chat))!.botStatus).toBe("member");
-    expect((await listAccounts(db, { activeOnly: true })).some((a) => a.chatId === chat)).toBe(true);
+    const listed = async () => (await listAccounts(db, { activeOnly: true })).some((a) => a.chatId === chat);
+    expect(await listed()).toBe(false);
+    expect(await upsertAccount(db, { chatId: chat, title: "New", type: "group", at: AT, activated: true })).toEqual({ activated: true });
+    expect(await listed()).toBe(true);
+    // Activation is sticky: later non-admin traffic or status updates never undo it.
+    expect(await upsertAccount(db, { chatId: chat, title: "New", type: "group", at: AT })).toEqual({ activated: true });
+    await upsertAccount(db, { chatId: chat, title: "New", type: "group", at: AT, botStatus: "administrator" });
+    expect((await getAccount(db, chat))!.activated).toBe(true);
   });
 
   test("reminders_default setting seeds reminders_on for new accounts only", async () => {
