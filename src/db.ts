@@ -495,10 +495,15 @@ export async function updateAccount(db: D1Database, chatId: number, patch: Accou
     .run();
 }
 
-/** A group upgraded to a supergroup gets a new id; carry its records over. */
+/**
+ * A group upgraded to a supergroup gets a new id; carry its records over. Supergroups restart
+ * message ids, so the moved entries' card and source message ids are cleared.
+ */
 export async function migrateChat(db: D1Database, from: number, to: number): Promise<void> {
   await db.batch([
-    db.prepare("UPDATE entries SET chat_id = ? WHERE chat_id = ?").bind(to, from),
+    db
+      .prepare("UPDATE entries SET chat_id = ?, card_msg_id = NULL, source_msg_id = NULL WHERE chat_id = ?")
+      .bind(to, from),
     db.prepare("UPDATE pending_actions SET chat_id = ? WHERE chat_id = ?").bind(to, from),
     db.prepare("UPDATE OR REPLACE broadcast_messages SET chat_id = ? WHERE chat_id = ?").bind(to, from),
     db

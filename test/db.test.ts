@@ -20,6 +20,7 @@ import {
   migrateChat,
   type NewEntry,
   recent,
+  setCardMessage,
   setSetting,
   takePendingAction,
   tradeToJson,
@@ -203,9 +204,13 @@ describe("accounts", () => {
     const to = freshChat();
     await upsertAccount(db, { chatId: from, title: "Old", type: "group", at: AT });
     await updateAccount(db, from, { remindersOn: false });
-    const e = await mk(from);
+    const e = await mk(from, trade(), { sourceMsgId: 41 });
+    await setCardMessage(db, e.id, 42);
     await migrateChat(db, from, to);
     expect((await getEntry(db, e.id))!.chatId).toBe(to);
+    // Supergroups restart message ids: the old card/source ids would point at someone else's messages.
+    const ids = await db.prepare("SELECT card_msg_id, source_msg_id FROM entries WHERE id = ?").bind(e.id).first();
+    expect(ids).toEqual({ card_msg_id: null, source_msg_id: null });
     expect(await getAccount(db, from)).toBeNull();
     const a = (await getAccount(db, to))!;
     expect(a.title).toBe("Old");
