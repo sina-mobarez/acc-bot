@@ -1,6 +1,7 @@
 import type { Update } from "@grammyjs/types";
 import type { App } from "./app";
 import { nowTehran } from "./app";
+import { runCron } from "./cron";
 import { parseAdminIds, setSetting } from "./db";
 import { handleUpdate } from "./handlers/update";
 import { createGeminiNlu } from "./nlu";
@@ -102,5 +103,9 @@ export default {
     if (pathname.startsWith("/api/")) return new Response("not found", { status: 404 }); // Task 13
 
     return env.ASSETS.fetch(req);
+  },
+
+  async scheduled(event, env, ctx): Promise<void> {
+    await runCron(makeApp(env, ctx), new Date(event.scheduledTime));
   },
 } satisfies ExportedHandler<Env>;

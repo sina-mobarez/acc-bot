@@ -12,3 +12,6 @@ export async function onGroupsCommand(_app: App, _msg: Message): Promise<void> {
 
 /** Task 12: /cancel of a pending broadcast (private chat, admins). */
 export async function onCancelCommand(_app: App, _msg: Message): Promise<void> {}
+
+/** Task 12: send the next batch of an in-progress broadcast (called from cron). */
+export async function runBroadcastBatch(_app: App): Promise<void> {}
