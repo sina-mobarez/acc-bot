@@ -6,6 +6,7 @@ import {
   jalali,
   renderBalance,
   renderEntry,
+  renderList,
   renderReminder,
   settlementKeyboard,
 } from "../src/cards";
@@ -122,6 +123,21 @@ describe("renderReminder / renderBalance", () => {
   it("says settled for a fully settled account", () => {
     const settled = summarize([trade(), trade({ side: "RECEIVE", rate: null, asset: "USDT" }), trade({ side: "PAY", rate: null, asset: "IRT", amount: D(266000000) })]);
     expect(renderBalance("گروه", settled, [])).toContain("تسویه");
+  });
+});
+
+describe("group name escaping", () => {
+  const name = "<b>g</b>";
+  const acc = summarize([trade()]);
+  const outputs: [string, string][] = [
+    ["renderList", renderList(name, [entry()])],
+    ["renderList (empty)", renderList(name, [])],
+    ["renderBalance", renderBalance(name, acc, [])],
+    ["renderReminder", renderReminder(name, acc, [], "x")],
+  ];
+  it.each(outputs)("%s escapes the name", (_n, out) => {
+    expect(out).toContain("&lt;b&gt;g&lt;/b&gt;");
+    expect(out).not.toContain("<b>g</b>");
   });
 });
 
