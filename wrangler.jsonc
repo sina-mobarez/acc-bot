@@ -1,0 +1,17 @@
+{
+  "name": "acc-bot",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-11-01",
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "acc-bot",
+      // PLACEHOLDER: replace with the id printed by `wrangler d1 create acc-bot`
+      "database_id": "REPLACE_WITH_D1_DATABASE_ID",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "assets": { "directory": "public", "binding": "ASSETS" },
+  "triggers": { "crons": ["* * * * *"] },
+  "vars": { "GEMINI_MODEL": "gemini-flash-latest", "DEFAULT_ASSET": "USDT" }
+}
