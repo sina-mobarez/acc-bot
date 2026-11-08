@@ -4,7 +4,7 @@ import { escapeHtml, type Keyboard } from "./cards";
 import { Budget } from "./constants";
 import {
   accountName, type Broadcast, DELIVERIES_PER_STATEMENT, type Delivery, broadcastReport, clearUserState, createBroadcast, drainedBroadcasts,
-  getUserState, isAdmin, listAccounts, listAdmins, migrateChat, nextBroadcastWork, recordDeliveries,
+  getUserState, hasActiveBroadcast, isAdmin, listAccounts, listAdmins, migrateChat, nextBroadcastWork, recordDeliveries,
   setBroadcastStatus, setUserState, startBroadcastDelete, takeUserState, updateAccount,
 } from "./db";
 import { fa } from "./money";
@@ -200,9 +200,9 @@ export async function handleBroadcastCallback(app: App, q: CallbackQuery): Promi
       statusChatId: chatId,
       statusMsgId: msgId,
     });
-    await answer(app, q, "در حال ارسال…");
-    await editMessage(app, chatId, msgId, "⏳ در حال ارسال…", null);
-    app.defer(runBroadcastBatch(app));
+    await answer(app, q, "در صف ارسال قرار گرفت.");
+    // The every-minute cron sends it: one sender, so no double copies and no webhook budget overrun (R23).
+    await editMessage(app, chatId, msgId, "⏳ در صف ارسال؛ ارسال تا حدود یک دقیقه‌ی دیگر شروع می‌شود…", null);
     return;
   }
 
@@ -225,9 +225,8 @@ export async function handleBroadcastCallback(app: App, q: CallbackQuery): Promi
     await answer(app, q, "این پیام قبلاً حذف شده است.");
     return setMarkup(app, chatId, msgId, null);
   }
-  await answer(app, q, "در حال حذف…");
+  await answer(app, q, "در صف حذف قرار گرفت؛ تا حدود یک دقیقه‌ی دیگر شروع می‌شود.");
   await setMarkup(app, chatId, msgId, null);
-  app.defer(runBroadcastBatch(app));
 }
 
 // --- batches --------------------------------------------------------------------
@@ -346,11 +345,13 @@ async function finishDrained(app: App, budget: Budget): Promise<void> {
 }
 
 /**
- * One cron/deferred step, charged to `budget` (Telegram calls and D1 statements alike): copy or delete
+ * One cron step, charged to `budget` (Telegram calls and D1 statements alike): copy or delete
  * queued messages oldest first, record the outcomes in a few batched statements, then close drained
  * broadcasts. A Telegram rate limit ends the step; the rest stays queued for the next tick.
  */
 export async function runBroadcastBatch(app: App, budget: Budget = new Budget()): Promise<void> {
+  // Most ticks have nothing to do: one cheap query on the small broadcasts table, then stop.
+  if (!budget.take() || !(await hasActiveBroadcast(app.db))) return;
   // Rows fetched n: n Telegram calls + ceil(n / per-statement) outcome writes, within what is left
   // after the work query and the closing reserve.
   const avail = budget.left - 1 - FINISH_RESERVE;

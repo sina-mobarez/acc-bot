@@ -750,6 +750,12 @@ export interface BroadcastWork {
   fromMessageId: number;
 }
 
+/** True if some broadcast is still sending or deleting (only then is there queue work). */
+export async function hasActiveBroadcast(db: D1Database): Promise<boolean> {
+  const r = await db.prepare("SELECT 1 AS x FROM broadcasts WHERE status IN ('sending', 'deleting') LIMIT 1").first();
+  return r !== null;
+}
+
 /** Oldest-first rows still to copy or delete, across broadcasts. */
 export async function nextBroadcastWork(db: D1Database, limit: number): Promise<BroadcastWork[]> {
   const { results } = await db

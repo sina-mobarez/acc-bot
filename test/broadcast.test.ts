@@ -50,6 +50,7 @@ async function startBroadcast(app: ReturnType<typeof makeApp>) {
   await onBroadcastCapture(app, msg("سلام به همه"));
   await handleBroadcastCallback(app, cb("bc:go"));
   await app.flush();
+  await runBroadcastBatch(app); // the cron tick picks the queue up
 }
 
 beforeEach(async () => {
@@ -94,8 +95,10 @@ describe("broadcast", () => {
     expect(String(confirm.text)).toContain("۳ گروه");
 
     await handleBroadcastCallback(app, cb("bc:go"));
-    expect(calls(app, "editMessageText")[0].text).toBe("⏳ در حال ارسال…");
+    expect(String(calls(app, "editMessageText")[0].text)).toContain("یک دقیقه");
     await app.flush();
+    expect(calls(app, "copyMessage")).toHaveLength(0); // nothing sent from the webhook itself
+    await runBroadcastBatch(app);
 
     const copies = calls(app, "copyMessage");
     expect(copies).toHaveLength(3);
@@ -256,6 +259,8 @@ describe("broadcast", () => {
     });
     await handleCallback(app, cb(`bdy:${id}`)); // routed through the main callback handler
     await app.flush();
+    expect(calls(app, "deleteMessage")).toHaveLength(0); // deletion waits for the cron tick
+    await runBroadcastBatch(app);
     const dels = calls(app, "deleteMessage");
     expect(dels.map((d) => d.chat_id).sort()).toEqual([a, b].sort());
     const final = String(calls(app, "editMessageText").at(-1)!.text);
@@ -274,6 +279,32 @@ describe("broadcast", () => {
     await handleBroadcastCallback(app, cb("bc:go", 42));
     expect(calls(app, "answerCallbackQuery")[0]).toMatchObject({ show_alert: true });
     expect(calls(app, "copyMessage")).toHaveLength(0);
+  });
+
+  test("no active broadcast: the tick makes one cheap query and skips the work scan", async () => {
+    await groups(2);
+    const seen: string[] = [];
+    const counting = new Proxy(db, {
+      get(target, prop) {
+        if (prop === "prepare") return (sql: string) => (seen.push(sql), target.prepare(sql));
+        const v = Reflect.get(target, prop);
+        return typeof v === "function" ? v.bind(target) : v;
+      },
+    });
+    const app = makeApp({ db: counting });
+    const budget = new Budget();
+    await runBroadcastBatch(app, budget);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toMatch(/FROM broadcasts/);
+    expect(seen[0]).not.toMatch(/broadcast_messages/);
+    expect(budget.left).toBe(INVOCATION_BUDGET - 1);
+  });
+
+  test("migration 0002 indexes the broadcast work queue", async () => {
+    const idx = await db
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name IN ('broadcast_messages_work', 'broadcasts_status')")
+      .all<{ name: string }>();
+    expect(idx.results.map((r) => r.name).sort()).toEqual(["broadcast_messages_work", "broadcasts_status"]);
   });
 
   test("/groups lists active groups", async () => {
