@@ -233,9 +233,18 @@ export function debtLine(asset: string, owed: Decimal): string {
   return `🔵 ${name}: ما <b>${fa(owed.neg())}</b> ${name} به مشتری بدهکاریم`;
 }
 
+/** Lines per list in one message: keeps balance/reminder texts under Telegram's 4096-char limit. */
+export const MAX_LIST_LINES = 15;
+
+/** The first `max` lines, then «و X مورد دیگر» for the rest. */
+function capLines(lines: string[], max = MAX_LIST_LINES): string[] {
+  if (lines.length <= max) return lines;
+  return [...lines.slice(0, max), `<i>… و ${fa(lines.length - max)} مورد دیگر</i>`];
+}
+
 function openDealLines(open: { id: number; legs: Leg[] }[]): string[] {
   const lines: string[] = [];
-  for (const d of open) {
+  for (const d of open.slice(0, MAX_LIST_LINES)) {
     const legs = d.legs
       .filter((l) => l.remaining.gt(0))
       .map((l) => {
@@ -245,6 +254,7 @@ function openDealLines(open: { id: number; legs: Leg[] }[]): string[] {
       });
     lines.push(`📌 <code>${dealCode(d.id)}</code> · ${legs.join(" · ")}`);
   }
+  if (open.length > MAX_LIST_LINES) lines.push(`<i>… و ${fa(open.length - MAX_LIST_LINES)} مورد دیگر</i>`);
   return lines;
 }
 
@@ -274,13 +284,11 @@ export function renderBalance(name: string, acc: Account, open: { id: number; le
   }
 
   if (acc.paid.size || acc.received.size) {
-    lines.push(LINE, "💳 <b>پرداخت‌ها</b>");
-    for (const [asset, amt] of [...acc.received].sort()) {
-      lines.push(`📥 دریافتی از مشتری: ${fa(amt)} ${escapeHtml(assetName(asset))}`);
-    }
-    for (const [asset, amt] of [...acc.paid].sort()) {
-      lines.push(`💸 پرداختی به مشتری: ${fa(amt)} ${escapeHtml(assetName(asset))}`);
-    }
+    const pays = [
+      ...[...acc.received].sort().map(([asset, amt]) => `📥 دریافتی از مشتری: ${fa(amt)} ${escapeHtml(assetName(asset))}`),
+      ...[...acc.paid].sort().map(([asset, amt]) => `💸 پرداختی به مشتری: ${fa(amt)} ${escapeHtml(assetName(asset))}`),
+    ];
+    lines.push(LINE, "💳 <b>پرداخت‌ها</b>", ...capLines(pays));
   }
   lines.push(LINE, "<i>ثبت پرداخت: «دریافت ۵۰ میلیون تومن» یا «پرداخت ۱۰۰ تتر»</i>");
   return lines.join("\n");

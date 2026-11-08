@@ -1,7 +1,7 @@
 /** Fixed Persian joke lines. Light, friendly teasing only: no family, religion, ethnicity, looks or sexual content. */
 
 export const ORDINARY_LINES: string[] = [
-  "حساب حساب است، کاکا برادر! 😄",
+  "حساب حساب است، داداش! 😄",
   "دفتر که باز شد، همه چیز رسمی می‌شود 📒",
   "ثبت شد؛ حالا دیگر نمی‌شود گفت «یادم نیست» 😉",
   "این عدد را گذاشتم تو دفتر، جایش امن است 🔐",

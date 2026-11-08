@@ -318,6 +318,24 @@ describe("queries", () => {
   });
 });
 
+describe("price coin cap", () => {
+  test("at most 10 unique coins are quoted", async () => {
+    let kucoinCalls = 0;
+    const base = prices({ "api.kucoin.com": { code: "200000", data: { price: "1" } } });
+    const f = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).includes("kucoin")) kucoinCalls++;
+      return base(input, init);
+    }) as typeof fetch;
+    const coins = Array.from({ length: 30 }, (_, i) => `C${i}`);
+    const a = app(nlu({ intent: "query_price", coins: [...coins, "c0", "C1"] }), f);
+    const m = msg(freshGroup(), CLIENT, "قیمت همه");
+    await handleMessage(a, m, m.text!);
+    expect(kucoinCalls).toBe(10);
+    expect(lastText(a)).toContain("C9");
+    expect(lastText(a)).not.toContain("C10");
+  });
+});
+
 describe("deal actions", () => {
   test("settle creates linked batch", async () => {
     const chat = freshGroup();

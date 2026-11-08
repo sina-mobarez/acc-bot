@@ -1,6 +1,7 @@
 import Decimal from "decimal.js";
 import { describe, expect, it } from "vitest";
 import {
+  debtLine,
   editKeyboard,
   entryKeyboard,
   jalali,
@@ -12,7 +13,7 @@ import {
   settlementKeyboard,
 } from "../src/cards";
 import { dealCode, type Entry } from "../src/db";
-import { summarize } from "../src/ledger";
+import { debts, openDeals, summarize } from "../src/ledger";
 import { createTg, isForbidden, TgError } from "../src/telegram";
 import type { Trade } from "../src/trade";
 import { CLIENT_WRITE_REFUSALS, NUDGE_LINES, ORDINARY_LINES, pick } from "../src/jokes";
@@ -127,6 +128,40 @@ describe("renderReminder / renderBalance", () => {
   });
 });
 
+describe("Telegram's 4096-char limit", () => {
+  // 60 approved deals with mixed legs, none settled: every one of them is open.
+  const ledger = Array.from({ length: 60 }, (_, i) => ({
+    id: 1000 + i,
+    trade: trade({ amount: D(1000 + i), asset: i % 2 ? "USDT" : "BTC", rate: D(266000 + i) }),
+    linkedDealId: null,
+  }));
+  const acc = summarize(ledger.map((l) => l.trade));
+  const open = openDeals(ledger);
+
+  it("caps open deals but keeps the totals (balance)", () => {
+    expect(open).toHaveLength(60);
+    const out = renderBalance("گروه بزرگ", acc, open);
+    expect(out.length).toBeLessThan(4096);
+    expect(out).toContain("مانده حساب");
+    expect(out).toContain(dealCode(1000));
+    expect(out).toContain(dealCode(1014));
+    expect(out).not.toContain(dealCode(1015));
+    expect(out).toContain("و ۴۵ مورد دیگر");
+    for (const [asset, owed] of debts(acc)) expect(out).toContain(debtLine(asset, owed));
+  });
+
+  it("caps open deals but keeps the totals (reminder)", () => {
+    const out = renderReminder("گروه بزرگ", acc, open, "یادآوری");
+    expect(out.length).toBeLessThan(4096);
+    expect(out).toContain("و ۴۵ مورد دیگر");
+    expect(out).toContain("بدهکارید");
+  });
+
+  it("a short list is not capped", () => {
+    expect(renderBalance("گ", acc, open.slice(0, 3))).not.toContain("مورد دیگر");
+  });
+});
+
 describe("group name escaping", () => {
   const name = "<b>g</b>";
   const acc = summarize([trade()]);
@@ -146,6 +181,11 @@ describe("jokes", () => {
   it("has enough lines and picks deterministically", () => {
     for (const l of [ORDINARY_LINES, NUDGE_LINES, CLIENT_WRITE_REFUSALS]) expect(l.length).toBeGreaterThanOrEqual(8);
     expect(pick(ORDINARY_LINES, 13)).toBe(ORDINARY_LINES[13 % ORDINARY_LINES.length]);
+  });
+
+  it("no line touches ethnicity (owner's hard line)", () => {
+    expect(ORDINARY_LINES).toContain("حساب حساب است، داداش! 😄");
+    for (const l of [ORDINARY_LINES, NUDGE_LINES, CLIENT_WRITE_REFUSALS].flat()) expect(l).not.toContain("کاکا");
   });
 });
 

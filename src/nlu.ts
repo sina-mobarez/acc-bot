@@ -58,6 +58,9 @@ INTENTS
 - chitchat: greetings, thanks, banter, general questions. Put the Persian answer in reply.
 - unclear: if the message might be a deal or payment but you are not sure about side, direction, amount, which deal, or anything else, use unclear with a short Persian question in reply instead of guessing. A wrong ledger entry is far worse than a question.
 
+MONEY FACTS
+- You never know the ledger. never state balances, amounts, debts or prices in reply or joke (no «۱۰۰ تتر بدهکاری», no «قیمت تتر ۲۷۰ هزار است»). For any question about them use query_balance, query_deals or query_price; the program answers with the real figures.
+
 ROLES
 - A client (role "client") may ONLY ask: balance, deals, price, or chitchat. If a client message sounds like a write (trade, payment, settle, edit, cancel), still report the intent you understood; the program refuses it.
 - An admin may do everything.
@@ -115,6 +118,22 @@ export function isNluOutput(v: unknown): v is NluOutput {
   return ok("changes", (x) => isObj(x) && ["amount_text", "rate_text", "note"].every((k) => x[k] === undefined || isStr(x[k])));
 }
 
+/** Longest Gemini text echoed to Telegram, per field (Telegram caps a message at 4096 chars). */
+const TEXT_CAPS: [field: "reply" | "joke" | "note", max: number][] = [["reply", 1000], ["joke", 200], ["note", 200]];
+
+/** Truncate the free-text fields Gemini writes, so one runaway answer can't break a message. */
+export function clampNluOutput(o: NluOutput): NluOutput {
+  const out: NluOutput = { ...o };
+  for (const [k, max] of TEXT_CAPS) {
+    const v = out[k];
+    if (v !== undefined && v.length > max) out[k] = v.slice(0, max);
+  }
+  if (out.changes?.note !== undefined && out.changes.note.length > 200) {
+    out.changes = { ...out.changes, note: out.changes.note.slice(0, 200) };
+  }
+  return out;
+}
+
 /** Gemini sends null for absent nullable fields; drop them (one level into `changes`). */
 function stripNulls(v: unknown): unknown {
   if (!isObj(v)) return v;
@@ -163,7 +182,7 @@ export function createGeminiNlu(apiKey: string, model: string, f: typeof fetch):
         const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
         if (typeof text !== "string") return null;
         const parsed = stripNulls(JSON.parse(text));
-        return isNluOutput(parsed) ? parsed : null;
+        return isNluOutput(parsed) ? clampNluOutput(parsed) : null;
       } catch {
         return null;
       }

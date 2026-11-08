@@ -32,6 +32,8 @@ const NOT_FOUND = "پیدا نشد.";
 const DEAL_INTENTS = new Set<NluOutput["intent"]>(["settle_deal", "edit_deal", "cancel_deal"]);
 const WRITE_KINDS = new Set<Action["kind"]>(["create", "payment", "settle", "edit", "cancel"]);
 const MAX_LISTED = 30;
+/** KuCoin calls per price question (one per coin): keeps a long Gemini coin list inside the subrequest budget. */
+const MAX_COINS = 10;
 
 interface Ctx {
   app: App;
@@ -229,7 +231,9 @@ async function dispatch(c: Ctx, action: Action, joke: string | undefined, out: N
       return;
     }
     case "price": {
-      const coins = [...new Set(action.coins.map((x) => x.trim().toUpperCase()))].filter((x) => x && x !== "USDT");
+      const coins = [...new Set(action.coins.map((x) => x.trim().toUpperCase()))]
+        .filter((x) => x && x !== "USDT")
+        .slice(0, MAX_COINS);
       await send(c, withJoke(renderPrices(c.usdt, await quotes(c, coins)), joke));
       return;
     }
