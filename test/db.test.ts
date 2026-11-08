@@ -177,6 +177,27 @@ describe("accounts", () => {
     expect((await listAccounts(db, { activeOnly: true })).some((a) => a.chatId === chat)).toBe(true);
   });
 
+  test("reminders_default setting seeds reminders_on for new accounts only", async () => {
+    const existing = freshChat();
+    await upsertAccount(db, { chatId: existing, title: "E", type: "group", at: AT });
+    await setSetting(db, "reminders_default", "0");
+    try {
+      const fresh = freshChat();
+      await upsertAccount(db, { chatId: fresh, title: "F", type: "group", at: AT });
+      const viaStatus = freshChat();
+      await upsertAccount(db, { chatId: viaStatus, title: "S", type: "group", at: AT, botStatus: "administrator" });
+      await upsertAccount(db, { chatId: existing, title: "E2", type: "group", at: AT });
+      expect((await getAccount(db, fresh))!.remindersOn).toBe(false);
+      expect((await getAccount(db, viaStatus))!.remindersOn).toBe(false);
+      expect((await getAccount(db, existing))!.remindersOn).toBe(true);
+    } finally {
+      await db.prepare("DELETE FROM settings WHERE key = 'reminders_default'").run();
+    }
+    const dflt = freshChat();
+    await upsertAccount(db, { chatId: dflt, title: "D", type: "group", at: AT });
+    expect((await getAccount(db, dflt))!.remindersOn).toBe(true);
+  });
+
   test("migrateChat moves entries and account", async () => {
     const from = freshChat();
     const to = freshChat();

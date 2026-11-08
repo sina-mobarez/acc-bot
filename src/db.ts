@@ -394,8 +394,12 @@ const accountFromRow = (r: Row): Account => ({
 
 export const accountName = (a: Pick<Account, "title" | "displayName">): string => a.displayName ?? a.title;
 
+/** reminders_on for a first insert: the 'reminders_default' setting ('0' turns it off; anything else, or unset, is on). */
+const REMINDERS_DEFAULT_SQL =
+  "COALESCE((SELECT CASE value WHEN '0' THEN 0 ELSE 1 END FROM settings WHERE key = 'reminders_default'), 1)";
+
 /**
- * Record a group as the bot sees it. Without `botStatus`, seeing the chat means the bot is a
+ * Record a group as the bot sees it. A new account's reminders_on follows the reminders_default setting. Without `botStatus`, seeing the chat means the bot is a
  * member: a first insert gets 'member', an existing admin status is kept, and left/kicked revive.
  */
 export async function upsertAccount(
@@ -405,7 +409,8 @@ export async function upsertAccount(
   if (a.botStatus === undefined) {
     await db
       .prepare(
-        `INSERT INTO accounts (chat_id, title, type, bot_status, updated_at) VALUES (?, ?, ?, 'member', ?)
+        `INSERT INTO accounts (chat_id, title, type, bot_status, updated_at, reminders_on)
+         VALUES (?, ?, ?, 'member', ?, ${REMINDERS_DEFAULT_SQL})
          ON CONFLICT (chat_id) DO UPDATE SET title = excluded.title, type = excluded.type,
            updated_at = excluded.updated_at,
            bot_status = CASE WHEN accounts.bot_status IN ('left', 'kicked') THEN 'member' ELSE accounts.bot_status END`,
@@ -415,7 +420,8 @@ export async function upsertAccount(
   } else {
     await db
       .prepare(
-        `INSERT INTO accounts (chat_id, title, type, bot_status, updated_at) VALUES (?, ?, ?, ?, ?)
+        `INSERT INTO accounts (chat_id, title, type, bot_status, updated_at, reminders_on)
+         VALUES (?, ?, ?, ?, ?, ${REMINDERS_DEFAULT_SQL})
          ON CONFLICT (chat_id) DO UPDATE SET title = excluded.title, type = excluded.type,
            bot_status = excluded.bot_status, updated_at = excluded.updated_at`,
       )

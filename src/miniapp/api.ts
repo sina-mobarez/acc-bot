@@ -380,17 +380,27 @@ async function adminRemove({ app, url }: Ctx, rawId: string | null) {
 }
 
 async function settingsGet({ app }: Ctx) {
-  const v = parseDeviationSetting(await getSetting(app.db, "deviation_pct"));
-  return { deviation_pct: (v ?? new Decimal(DEFAULT_DEVIATION_PCT)).toFixed() };
+  const [dev, rem] = await Promise.all([getSetting(app.db, "deviation_pct"), getSetting(app.db, "reminders_default")]);
+  return {
+    deviation_pct: (parseDeviationSetting(dev) ?? new Decimal(DEFAULT_DEVIATION_PCT)).toFixed(),
+    reminders_default: rem !== "0",
+  };
 }
 
+/** Partial update: deviation_pct (positive decimal) and/or reminders_default (boolean, stored '1'/'0'). */
 async function settingsPatch(c: Ctx) {
   const b = await bodyOf(c.req);
-  const raw = b.deviation_pct;
-  const v = typeof raw === "string" || typeof raw === "number" ? parseDeviationSetting(String(raw)) : null;
-  if (v === null) throw bad("درصد انحراف باید عددی مثبت باشد.");
-  await setSetting(c.app.db, "deviation_pct", v.toFixed());
-  return { deviation_pct: v.toFixed() };
+  let dev: Decimal | null = null;
+  if (b.deviation_pct !== undefined) {
+    const raw = b.deviation_pct;
+    dev = typeof raw === "string" || typeof raw === "number" ? parseDeviationSetting(String(raw)) : null;
+    if (dev === null) throw bad("درصد انحراف باید عددی مثبت باشد.");
+  }
+  const rem = b.reminders_default === undefined ? undefined : flag(b.reminders_default, "یادآوری پیش‌فرض");
+  if (dev === null && rem === undefined) throw bad("چیزی برای تغییر نیست.");
+  if (dev !== null) await setSetting(c.app.db, "deviation_pct", dev.toFixed());
+  if (rem !== undefined) await setSetting(c.app.db, "reminders_default", rem ? "1" : "0");
+  return settingsGet(c);
 }
 
 // --- dispatch ---------------------------------------------------------------------------

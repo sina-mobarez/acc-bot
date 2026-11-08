@@ -322,18 +322,36 @@ describe("admins and settings", () => {
     expect((await call(app, "DELETE", "/api/admins/4242")).status).toBe(404);
   });
 
+  test("reminders_default is exposed and validated", async () => {
+    const app = appFor();
+    await db.prepare("DELETE FROM settings WHERE key IN ('deviation_pct', 'reminders_default')").run();
+    expect((await call(app, "GET", "/api/settings")).json).toEqual({ deviation_pct: "3", reminders_default: true });
+    expect((await call(app, "PATCH", "/api/settings", { reminders_default: false })).json).toEqual({
+      deviation_pct: "3", reminders_default: false,
+    });
+    expect(await getSetting(db, "reminders_default")).toBe("0");
+    expect(await getSetting(db, "deviation_pct")).toBeNull(); // untouched by a partial patch
+    for (const bad of ["0", 1, null, "yes"]) {
+      expect((await call(app, "PATCH", "/api/settings", { reminders_default: bad })).status, String(bad)).toBe(400);
+    }
+    expect((await call(app, "PATCH", "/api/settings", {})).status).toBe(400);
+    expect((await call(app, "PATCH", "/api/settings", { reminders_default: true })).json.reminders_default).toBe(true);
+    expect(await getSetting(db, "reminders_default")).toBe("1");
+    await db.prepare("DELETE FROM settings WHERE key = 'reminders_default'").run();
+  });
+
   test("deviation_pct is validated as a positive decimal (R20)", async () => {
     const app = appFor();
     await db.prepare("DELETE FROM settings WHERE key = 'deviation_pct'").run();
-    expect((await call(app, "GET", "/api/settings")).json).toEqual({ deviation_pct: "3" });
-    expect((await call(app, "PATCH", "/api/settings", { deviation_pct: "۵.۵" })).json).toEqual({ deviation_pct: "5.5" });
+    expect((await call(app, "GET", "/api/settings")).json).toMatchObject({ deviation_pct: "3" });
+    expect((await call(app, "PATCH", "/api/settings", { deviation_pct: "۵.۵" })).json).toMatchObject({ deviation_pct: "5.5" });
     expect(await getSetting(db, "deviation_pct")).toBe("5.5");
     for (const bad of ["0", "-1", "abc", "", "1e3", null, {}]) {
       expect((await call(app, "PATCH", "/api/settings", { deviation_pct: bad })).status, String(bad)).toBe(400);
     }
     expect(await getSetting(db, "deviation_pct")).toBe("5.5");
     await setSetting(db, "deviation_pct", "garbage");
-    expect((await call(app, "GET", "/api/settings")).json).toEqual({ deviation_pct: "3" });
+    expect((await call(app, "GET", "/api/settings")).json).toMatchObject({ deviation_pct: "3" });
     await db.prepare("DELETE FROM settings WHERE key = 'deviation_pct'").run();
   });
 });

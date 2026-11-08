@@ -358,6 +358,13 @@ async function showSettings() {
     h("h3", {}, "درصد انحراف قیمت"),
     h("div", { class: "card" }, h("label", { class: "f" }, "هشدار وقتی قیمت معامله از بازار بیش از این درصد فاصله دارد", dev),
       h("button", { class: "btn", onclick: async () => { if (await attempt(() => api("PATCH", "/api/settings", { deviation_pct: dev.value }))) { toast("ذخیره شد."); showSettings(); } } }, "ذخیره")),
+    h("h3", {}, "یادآوری بدهی"),
+    h("div", { class: "card" }, h("label", { class: "sw" }, h("span", {}, "یادآوری برای گروه‌های تازه روشن باشد"),
+      h("input", { type: "checkbox", checked: set.reminders_default, onchange: async (e) => {
+        if (await attempt(() => api("PATCH", "/api/settings", { reminders_default: e.target.checked }))) toast("ذخیره شد.");
+        else showSettings();
+      } })),
+      h("div", { class: "muted" }, "فقط برای گروه‌هایی که از این به بعد اضافه می‌شوند؛ هر گروه را جدا هم می‌شود تغییر داد.")),
     h("h3", {}, "مدیرها"),
     h("div", { class: "list" }, adm.admins.map((a) =>
       h("div", { class: "row" },
