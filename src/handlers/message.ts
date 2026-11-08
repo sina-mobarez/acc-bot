@@ -66,6 +66,11 @@ async function sendCard(c: Ctx, ids: number[], text: string, keyboard: Keyboard 
 const who = (u: User | undefined): string =>
   !u ? "?" : u.username ? `@${u.username}` : [u.first_name, u.last_name].filter(Boolean).join(" ");
 
+/** Best-effort "typing…" while Gemini (often 7-11 s on the free tier) works. */
+function typing(c: Pick<Ctx, "app" | "chatId">): void {
+  c.app.defer(c.app.tg.call("sendChatAction", { chat_id: c.chatId, action: "typing" }).catch(() => undefined));
+}
+
 async function send(c: Pick<Ctx, "app" | "msg" | "chatId">, text: string, keyboard?: Keyboard | null): Promise<number> {
   const res = await c.app.tg.call<{ message_id: number }>("sendMessage", {
     chat_id: c.chatId,
@@ -172,6 +177,7 @@ export async function handleMessage(app: App, msg: Message, text: string): Promi
         const d = deviation(c, trade);
         let teased: string | undefined;
         if (d && d.dev.abs().gt(c.alertPct)) {
+          typing(c);
           teased = (await app.nlu.understand(await nluInput(c, text)))?.joke?.trim() || undefined;
         }
         joke = teased ?? fallbackJoke(c, trade);
@@ -181,6 +187,7 @@ export async function handleMessage(app: App, msg: Message, text: string): Promi
 
   // 2. Natural language (or a `#` message that didn't parse).
   if (!action) {
+    typing(c);
     out = await app.nlu.understand(await nluInput(c, text));
     if (!out) {
       await send(c, BUSY_TEXT);

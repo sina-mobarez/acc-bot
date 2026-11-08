@@ -19,6 +19,31 @@ describe("gemini nlu", () => {
     expect(await nlu({ [HOST]: 429 }).understand(input)).toBeNull();
   });
 
+  test("503 then success -> one retry, parsed output; temperature is low", async () => {
+    const bodies: any[] = [];
+    let n = 0;
+    const f = (async (_url: string, init: RequestInit) => {
+      bodies.push(JSON.parse(init.body as string));
+      n++;
+      if (n === 1) return new Response("busy", { status: 503 });
+      return Response.json(candidate(JSON.stringify({ intent: "query_price", coins: ["BTC"] })));
+    }) as unknown as typeof fetch;
+    const out = await createGeminiNlu("KEY", "m", f).understand(input);
+    expect(out).toEqual({ intent: "query_price", coins: ["BTC"] });
+    expect(n).toBe(2);
+    expect(bodies[0].generationConfig.temperature).toBeLessThanOrEqual(0.3);
+  }, 10000);
+
+  test("429 twice -> exactly two attempts, then null", async () => {
+    let n = 0;
+    const f = (async () => {
+      n++;
+      return new Response("quota", { status: 429 });
+    }) as unknown as typeof fetch;
+    expect(await createGeminiNlu("KEY", "m", f).understand(input)).toBeNull();
+    expect(n).toBe(2);
+  }, 10000);
+
   test("non-JSON text -> null", async () => {
     expect(await nlu({ [HOST]: candidate("not json") }).understand(input)).toBeNull();
   });

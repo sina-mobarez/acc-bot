@@ -214,6 +214,17 @@ describe("refusals and fallbacks", () => {
     expect(await recent(db, chat.id, 5)).toHaveLength(0);
   });
 
+  test("shows typing in the chat before waiting on Gemini", async () => {
+    const chat = freshGroup();
+    const a = app(nlu(null));
+    const m = msg(chat, ADMIN, "صد تا تتر خریدم");
+    await handleMessage(a, m, m.text!);
+    await a.flush();
+    const typing = a.tg.calls.filter((c) => c.method === "sendChatAction");
+    expect(typing).toHaveLength(1);
+    expect(typing[0].params).toMatchObject({ chat_id: chat.id, action: "typing" });
+  });
+
   test("gemini failure falls back: deviated # trade still gets a card with a gouging line", async () => {
     const chat = freshGroup();
     const a = app(nlu(null));

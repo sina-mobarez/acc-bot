@@ -144,7 +144,13 @@ function stripNulls(v: unknown): unknown {
   return out;
 }
 
-const TIMEOUT_MS = 8000;
+// Free-tier Gemini routinely takes 7-11 s (measured from Workers); the webhook has
+// already answered Telegram, and waitUntil allows ~30 s, so wait up to 20 s.
+const DEADLINE_MS = 20000;
+const RETRY_IF_UNDER_MS = 10000;
+const RETRY_DELAY_MS = 1000;
+// Low temperature: extraction must be reliable (at 0.7 the model sometimes dropped the amount).
+const TEMPERATURE = 0.3;
 
 export function createGeminiNlu(apiKey: string, model: string, f: typeof fetch): Nlu {
   return {
@@ -159,24 +165,36 @@ export function createGeminiNlu(apiKey: string, model: string, f: typeof fetch):
         "open_deals:", JSON.stringify(i.openDeals.slice(0, 20)),
         "account_names:", JSON.stringify((i.accountNames ?? []).slice(0, 200)),
       ].join("\n");
+      const body = JSON.stringify({
+        systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
+        contents: [{ role: "user", parts: [{ text: userText }] }],
+        generationConfig: {
+          responseMimeType: "application/json",
+          responseSchema: RESPONSE_SCHEMA,
+          temperature: TEMPERATURE,
+        },
+      });
+      const started = Date.now();
       try {
-        const res = await f(
-          `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
-          {
+        let res: Response | undefined;
+        for (let attempt = 0; attempt < 2; attempt++) {
+          const left = DEADLINE_MS - (Date.now() - started);
+          res = await f(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
             method: "POST",
             headers: { "content-type": "application/json", "x-goog-api-key": apiKey },
-            body: JSON.stringify({
-              systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
-              contents: [{ role: "user", parts: [{ text: userText }] }],
-              generationConfig: {
-                responseMimeType: "application/json",
-                responseSchema: RESPONSE_SCHEMA,
-                temperature: 0.7,
-              },
-            }),
-            signal: AbortSignal.timeout(TIMEOUT_MS),
-          },
-        );
+            body,
+            signal: AbortSignal.timeout(left),
+          });
+          // The free tier answers 429/503 under load; one quick retry while there's time.
+          if ((res.status === 429 || res.status === 503) && attempt === 0 && Date.now() - started < RETRY_IF_UNDER_MS) {
+            console.warn("gemini: HTTP", res.status, "retrying once");
+            await res.body?.cancel();
+            await new Promise((r) => setTimeout(r, RETRY_DELAY_MS));
+            continue;
+          }
+          break;
+        }
+        if (!res) return null;
         if (res.status !== 200) {
           console.warn("gemini: HTTP", res.status, (await res.text().catch(() => "")).slice(0, 500));
           return null;
