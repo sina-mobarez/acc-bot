@@ -1,4 +1,6 @@
 /** Fixed Persian joke lines. Light, friendly teasing only: no family, religion, ethnicity, looks or sexual content. */
+import type Decimal from "decimal.js";
+import { fa } from "./money";
 
 export const ORDINARY_LINES: string[] = [
   "حساب حساب است، داداش! 😄",
@@ -41,4 +43,25 @@ export const BUSY_TEXT =
 /** Deterministic pick: lines[seed % length]. */
 export function pick(lines: string[], seed: number): string {
   return lines[Math.abs(seed) % lines.length];
+}
+
+/** Teasing for a rate far from Nobitex (either direction). {ref} = Nobitex price, {rate} = the trade's rate, {dev} = deviation %. */
+export const GOUGING_LINES: string[] = [
+  "نوبیتکس داره {ref} می‌ده، تو داری {rate} حساب می‌کنی؟ خون ما رو تو شیشه کردی! 😄",
+  "{rate}؟ بازار {ref} است داداش، این قیمت را از کدام کهکشان آوردی؟ 🚀",
+  "نوبیتکس {ref}، شما {rate}؛ اختلاف {dev} درصد! دفتر دارد عرق می‌کند 😅",
+  "با این نرخ {rate}، نوبیتکس هم که {ref} است دلش برای ما می‌سوزد 🥲",
+  "قیمت {rate} را که دیدم، ماشین‌حساب دفتر یک آهی کشید؛ بازار که {ref} است 🧮",
+  "حاجی، {ref} بازار است نه {rate}! حساب کتاب با شوخی راه می‌افتد ولی نه این‌قدر 😉",
+  "دفتر ثبتش کرد، ولی با اخم: نوبیتکس {ref} و این معامله {rate}، یعنی چه؟ 🤨",
+  "اگر قیمت‌ها را این‌طور بچینیم، نوبیتکس {ref} ما را تعطیل می‌کند؛ {rate} کمی عجیب است 😎",
+];
+
+/** Pick a GOUGING line and fill it in. ref/rate are toman per USDT. */
+export function gougingLine(seed: number, ref: Decimal, rate: Decimal): string {
+  const dev = rate.sub(ref).div(ref).mul(100).abs().toDecimalPlaces(1);
+  return pick(GOUGING_LINES, seed)
+    .replaceAll("{ref}", fa(ref))
+    .replaceAll("{rate}", fa(rate))
+    .replaceAll("{dev}", fa(dev));
 }

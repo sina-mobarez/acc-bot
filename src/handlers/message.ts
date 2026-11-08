@@ -14,7 +14,7 @@ import {
 import {
   type Action, DEFAULT_DEVIATION_PCT, deviationPct, expandRateShorthand, parseDeviationSetting, toAction,
 } from "../intent";
-import { BUSY_TEXT, CLIENT_WRITE_REFUSALS, ORDINARY_LINES, pick } from "../jokes";
+import { BUSY_TEXT, CLIENT_WRITE_REFUSALS, ORDINARY_LINES, gougingLine, pick } from "../jokes";
 import { allocate, openDeals, summarize } from "../ledger";
 import { normalize, parseAmountText } from "../money";
 import type { NluInput, NluOutput } from "../nlu";
@@ -117,6 +117,13 @@ async function nluInput(c: Ctx, text: string): Promise<NluInput> {
   return input;
 }
 
+/** Fixed joke when Gemini gave none: a tease for a trade far from Nobitex, otherwise an ordinary line. */
+function fallbackJoke(c: Ctx, t: Trade): string {
+  const d = deviation(c, t);
+  if (d && t.rate && d.dev.abs().gt(c.alertPct)) return gougingLine(c.msg.message_id, d.ref, t.rate);
+  return pick(ORDINARY_LINES, c.msg.message_id);
+}
+
 export async function handleMessage(app: App, msg: Message, text: string): Promise<void> {
   const inGroup = msg.chat.type === "group" || msg.chat.type === "supergroup";
   const role: Ctx["role"] = msg.from && (await isAdmin(app.db, app.adminIds, msg.from.id)) ? "admin" : "client";
@@ -167,7 +174,7 @@ export async function handleMessage(app: App, msg: Message, text: string): Promi
         if (d && d.dev.abs().gt(c.alertPct)) {
           teased = (await app.nlu.understand(await nluInput(c, text)))?.joke?.trim() || undefined;
         }
-        joke = teased ?? pick(ORDINARY_LINES, msg.message_id);
+        joke = teased ?? fallbackJoke(c, trade);
       }
     }
   }
@@ -186,6 +193,7 @@ export async function handleMessage(app: App, msg: Message, text: string): Promi
     }
     action = toAction(out, { role, usdtToman: usdt?.latest ?? null, defaultAsset });
     joke = c.humor ? out.joke?.trim() || undefined : undefined;
+    if (c.humor && !joke && action.kind === "create") joke = fallbackJoke(c, action.trade);
   }
 
   if (!inGroup && WRITE_KINDS.has(action.kind)) {

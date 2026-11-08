@@ -59,12 +59,21 @@ export function applyMult(text: string, mult?: string): Decimal {
   return mult ? value.mul(MULTIPLIERS[mult.toLowerCase()]) : value;
 }
 
-const AMOUNT_RE = new RegExp(`^(${NUM})\\s*(?:(${MULT})${WORD_END})?$`, "iu");
+const AMOUNT_RE = new RegExp(`^(${NUM})\\s*(?:(${MULT})${WORD_END})?(?:\\s+(.+))?$`, "iu");
+
+// Words an LLM copies along with an amount ("۱۰۰ تا تتر", "۲۷۶ هزار تومن"); ignored, the unit comes from amount_unit.
+const UNIT_WORDS: ReadonlySet<string> = new Set([
+  "تا", "عدد",
+  ...Object.keys(ASSETS).map((k) => k.toLowerCase()),
+  ...Object.keys(ASSET_NAMES).map((k) => k.toLowerCase()),
+  "usdt", "usd", "eur", "aed", "try", "irt",
+]);
 
 /** "۲ میلیون" -> 2000000, "275k" -> 275000, "2,500,000" -> 2500000; null if not an amount. */
 export function parseAmountText(s: string): Decimal | null {
   const m = AMOUNT_RE.exec(normalize(s).trim());
   if (!m) return null;
+  if (m[3] && !m[3].trim().split(/\s+/).every((w) => UNIT_WORDS.has(w.toLowerCase()))) return null;
   try {
     return applyMult(m[1], m[2]);
   } catch {

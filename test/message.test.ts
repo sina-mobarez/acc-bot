@@ -14,7 +14,7 @@ import {
   type Entry,
 } from "../src/db";
 import { handleMessage } from "../src/handlers/message";
-import { BUSY_TEXT, CLIENT_WRITE_REFUSALS, ORDINARY_LINES, pick } from "../src/jokes";
+import { BUSY_TEXT, CLIENT_WRITE_REFUSALS, GOUGING_LINES, gougingLine, ORDINARY_LINES, pick } from "../src/jokes";
 import { openDeals, summarize } from "../src/ledger";
 import type { NluOutput } from "../src/nlu";
 import { TgError } from "../src/telegram";
@@ -214,7 +214,7 @@ describe("refusals and fallbacks", () => {
     expect(await recent(db, chat.id, 5)).toHaveLength(0);
   });
 
-  test("gemini failure falls back: deviated # trade still gets a card with an ordinary line", async () => {
+  test("gemini failure falls back: deviated # trade still gets a card with a gouging line", async () => {
     const chat = freshGroup();
     const a = app(nlu(null));
     const m = msg(chat, ADMIN, "#فروش ۱۰۰ تتر ۲۷۹۳۰۰");
@@ -222,8 +222,61 @@ describe("refusals and fallbacks", () => {
     expect(a.nlu.inputs).toHaveLength(1);
     const [e] = await recent(db, chat.id, 5);
     expect(e.status).toBe("pending");
-    expect(e.joke).toBe(pick(ORDINARY_LINES, m.message_id));
+    expect(e.joke).toBe(gougingLine(m.message_id, D(266000), D(279300)));
     expect(lastButtons(a)).toContain(`ok:${e.id}`);
+  });
+
+  test("NL trade with deviation and empty joke gets a gouging line", async () => {
+    const chat = freshGroup();
+    const a = app(nlu({ intent: "create_trade", side: "SELL", amount_text: "۱۰۰", asset: "تتر", rate_text: "۲۷۹۳۰۰" }));
+    const m = msg(chat, ADMIN, "صد تا تتر فروختم ۲۷۹۳۰۰");
+    await handleMessage(a, m, m.text!);
+    const [e] = await recent(db, chat.id, 5);
+    expect(e.status).toBe("pending");
+    expect(GOUGING_LINES.length).toBeGreaterThanOrEqual(6);
+    expect(e.joke).toBe(gougingLine(m.message_id, D(266000), D(279300)));
+    expect(lastText(a)).toContain("۲۶۶٬۰۰۰");
+    expect(e.joke).toContain("۲۶۶٬۰۰۰");
+  });
+
+  test("NL SELL far below Nobitex is teased too", async () => {
+    const chat = freshGroup();
+    const a = app(nlu({ intent: "create_trade", side: "SELL", amount_text: "۱۰۰", asset: "تتر", rate_text: "۲۵۰۰۰۰" }));
+    const m = msg(chat, ADMIN, "صد تا تتر فروختم ۲۵۰۰۰۰");
+    await handleMessage(a, m, m.text!);
+    const [e] = await recent(db, chat.id, 5);
+    expect(ORDINARY_LINES).not.toContain(e.joke);
+    expect(e.joke).toContain("۲۶۶٬۰۰۰");
+  });
+
+  test("NL trade without deviation and empty joke gets an ordinary line", async () => {
+    const chat = freshGroup();
+    const a = app(nlu({ intent: "create_trade", side: "BUY", amount_text: "۱۰۰", asset: "تتر", rate_text: "۲۶۶۰۰۰" }));
+    const m = msg(chat, ADMIN, "صد تا تتر خریدم ۲۶۶۰۰۰");
+    await handleMessage(a, m, m.text!);
+    const [e] = await recent(db, chat.id, 5);
+    expect(e.joke).toBe(pick(ORDINARY_LINES, m.message_id));
+  });
+
+  test("NL trade with humor off gets no joke", async () => {
+    const chat = freshGroup();
+    await upsertAccount(db, { chatId: chat.id, title: chat.title, type: chat.type, at: FIXED_NOW, activated: true });
+    await db.prepare("UPDATE accounts SET humor_on = 0 WHERE chat_id = ?").bind(chat.id).run();
+    const a = app(nlu({ intent: "create_trade", side: "SELL", amount_text: "۱۰۰", asset: "تتر", rate_text: "۲۷۹۳۰۰" }));
+    const m = msg(chat, ADMIN, "صد تا تتر فروختم ۲۷۹۳۰۰");
+    await handleMessage(a, m, m.text!);
+    const [e] = await recent(db, chat.id, 5);
+    expect(e.joke).toBeNull();
+  });
+
+  test("NL trade keeps Gemini's joke verbatim, escaped on the card", async () => {
+    const chat = freshGroup();
+    const a = app(nlu({ intent: "create_trade", side: "SELL", amount_text: "۱۰۰", asset: "تتر", rate_text: "۲۷۹۳۰۰", joke: "گرون <i>فروشی</i>" }));
+    const m = msg(chat, ADMIN, "صد تا تتر فروختم ۲۷۹۳۰۰");
+    await handleMessage(a, m, m.text!);
+    const [e] = await recent(db, chat.id, 5);
+    expect(e.joke).toBe("گرون <i>فروشی</i>");
+    expect(lastText(a)).toContain("گرون &lt;i&gt;فروشی&lt;/i&gt;");
   });
 
   test("bare mention gets a hint without calling Gemini", async () => {

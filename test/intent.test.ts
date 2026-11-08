@@ -20,6 +20,18 @@ describe("toAction", () => {
     expect(a.trade.tomanTotal).toBeNull();
   });
 
+  test("amount and rate with trailing unit words still parse", () => {
+    const a = toAction(
+      { intent: "create_trade", side: "BUY", amount_text: "۱۰۰ تا", asset: "تتر", rate_text: "۲۷۶" },
+      { ...admin, usdtToman: dec("266000") },
+    );
+    if (a.kind !== "create") throw new Error("expected create");
+    expect(a.trade.side).toBe("BUY");
+    expect(a.trade.asset).toBe("USDT");
+    expect(a.trade.amount.equals(100)).toBe(true);
+    expect(a.trade.rate!.equals(276000)).toBe(true);
+  });
+
   test("toman amount converts via fromToman and keeps tomanTotal", () => {
     const a = toAction(
       { intent: "create_trade", side: "BUY", amount_text: "۵۰۰ میلیون", amount_unit: "toman", rate_text: "۲۶۴۰۰۰" },

@@ -11,11 +11,22 @@ describe("parseAmountText", () => {
     ["275k", "275000"],
     ["1.5m", "1500000"],
     ["2,500,000", "2500000"],
+    ["۱۰۰", "100"],
+    ["۱۰۰ تا", "100"],
+    ["۱۰۰ تتر", "100"],
+    ["۱۰۰ تا تتر", "100"],
+    ["۱۰۰ عدد دلار", "100"],
+    ["۲۷۶ هزار تومن", "276000"],
+    ["۵۰ میلیون تومان", "50000000"],
+    ["۲ میلیون تومان", "2000000"],
+    ["1.5m usdt", "1500000"],
+    ["100 USDT", "100"],
+    ["5 toman", "5"],
   ])("%s", (text, expected) => {
     expect(parseAmountText(text)?.equals(new Decimal(expected))).toBe(true);
   });
 
-  test.each(["سلام", "", "12 abc"])("rejects %j", (text) => {
+  test.each(["سلام", "", "12 abc", "۱۰۰ سلام", "۱۰۰ ریال", "۱۰۰ تتر سلام", "100 constructor"])("rejects %j", (text) => {
     expect(parseAmountText(text)).toBeNull();
   });
 });
