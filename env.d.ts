@@ -6,7 +6,7 @@ interface Env {
   BOT_TOKEN: string;
   GEMINI_API_KEY: string;
   WEBHOOK_SECRET: string;
-  ADMIN_IDS: string;
+  ADMIN_IDS?: string; // unset until the owner knows their id (/id still works)
 }
 
 declare namespace Cloudflare {

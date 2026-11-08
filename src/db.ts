@@ -511,10 +511,10 @@ export interface Admin {
   addedAt: string;
 }
 
-/** Parse the comma-separated ADMIN_IDS secret. */
-export const parseAdminIds = (raw: string): Set<number> =>
+/** Parse the comma-separated ADMIN_IDS secret (unset or empty means no env admins). */
+export const parseAdminIds = (raw: string | undefined): Set<number> =>
   new Set(
-    raw
+    (raw ?? "")
       .split(",")
       .map((s) => s.trim())
       .filter((s) => /^-?\d+$/.test(s))

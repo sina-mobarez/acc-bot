@@ -167,6 +167,29 @@ describe("worker routes", () => {
     await Promise.all(waits);
   });
 
+  test("ADMIN_IDS unset: /tg still answers /id and /api does not throw", async () => {
+    const noAdmins = { ...testEnv, ADMIN_IDS: undefined } as unknown as Env;
+    const sentTexts: string[] = [];
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input instanceof Request ? input.url : input);
+      if (url.endsWith("/sendMessage")) sentTexts.push(JSON.parse(String(init?.body)).text);
+      return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }));
+    }) as typeof fetch;
+    try {
+      const waits: Promise<unknown>[] = [];
+      const c = { waitUntil: (p: Promise<unknown>) => waits.push(p), passThroughOnException() {} } as unknown as ExecutionContext;
+      const update = { update_id: ++uid, message: msg({ chat: priv, text: "/id" }) };
+      const req = R("https://x.dev/tg", { method: "POST", headers: { [H]: "s3cret" }, body: JSON.stringify(update) });
+      expect((await worker.fetch(req, noAdmins, c)).status).toBe(200);
+      await Promise.all(waits);
+      expect(sentTexts.some((t) => t.includes(`<code>${user.id}</code>`))).toBe(true);
+      expect((await worker.fetch(R("https://x.dev/api/settings"), noAdmins, ctx)).status).toBe(401);
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+
   test("/api/* requires Mini App auth", async () => {
     const res = await worker.fetch(R("https://x.dev/api/foo"), testEnv, ctx);
     expect(res.status).toBe(401);
