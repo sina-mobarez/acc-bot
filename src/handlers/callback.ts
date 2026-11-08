@@ -1,6 +1,7 @@
 import type { CallbackQuery, User } from "@grammyjs/types";
 import Decimal from "decimal.js";
 import type { App } from "../app";
+import { handleBroadcastCallback } from "../broadcast";
 import {
   debtLine, entryKeyboard, type Keyboard, renderEntry, renderSettlement, settlementKeyboard,
 } from "../cards";
@@ -212,6 +213,7 @@ async function discardEdit(c: Ctx, actionId: number): Promise<void> {
 
 /** Inline-button callbacks: approve/reject, cancel (with confirm), settlement batches, edit apply/discard. */
 export async function handleCallback(app: App, q: CallbackQuery): Promise<void> {
+  if (/^(bc:(go|no)|bd:\d+|bdy:\d+|bdn:\d+)$/.test(q.data ?? "")) return handleBroadcastCallback(app, q);
   if (!(await isAdmin(app.db, app.adminIds, q.from.id))) return answer(app, q, NOT_ALLOWED, true);
   const m = /^(ok|no|cx|cy|cn|ea|ed):(\d+)$/.exec(q.data ?? "");
   const msg = q.message;

@@ -672,3 +672,211 @@ export async function takePendingAction(
     .first<Row>();
   return r ? pendingFromRow(r) : null;
 }
+
+// --- broadcasts -----------------------------------------------------------------
+
+export type BroadcastStatus = "sending" | "done" | "deleting" | "deleted";
+
+export interface Broadcast {
+  id: number;
+  fromChatId: number;
+  fromMessageId: number;
+  preview: string;
+  createdBy: string;
+  createdById: number;
+  createdAt: string;
+  status: BroadcastStatus;
+  statusChatId: number | null;
+  statusMsgId: number | null;
+}
+
+const broadcastFromRow = (r: Row): Broadcast => ({
+  id: Number(r.id),
+  fromChatId: Number(r.from_chat_id),
+  fromMessageId: Number(r.from_message_id),
+  preview: String(r.preview),
+  createdBy: String(r.created_by),
+  createdById: Number(r.created_by_id),
+  createdAt: String(r.created_at),
+  status: String(r.status) as BroadcastStatus,
+  statusChatId: num(r.status_chat_id),
+  statusMsgId: num(r.status_msg_id),
+});
+
+/** A new broadcast (status 'sending') with a queued row for every active, non-archived account. */
+export async function createBroadcast(
+  db: D1Database,
+  b: {
+    fromChatId: number;
+    fromMessageId: number;
+    preview: string;
+    createdBy: string;
+    createdById: number;
+    createdAt: string;
+    statusChatId: number;
+    statusMsgId: number;
+  },
+): Promise<{ id: number; recipients: number }> {
+  const res = await db
+    .prepare(
+      `INSERT INTO broadcasts (from_chat_id, from_message_id, preview, created_by, created_by_id, created_at,
+         status_chat_id, status_msg_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .bind(b.fromChatId, b.fromMessageId, b.preview, b.createdBy, b.createdById, b.createdAt, b.statusChatId, b.statusMsgId)
+    .run();
+  const id = Number(res.meta.last_row_id);
+  const q = await db
+    .prepare(
+      `INSERT INTO broadcast_messages (broadcast_id, chat_id)
+       SELECT ?, chat_id FROM accounts
+       WHERE bot_status IN (${ACTIVE_BOT_STATUSES.map(() => "?").join(",")}) AND archived = 0`,
+    )
+    .bind(id, ...ACTIVE_BOT_STATUSES)
+    .run();
+  return { id, recipients: q.meta.changes };
+}
+
+export async function getBroadcast(db: D1Database, id: number): Promise<Broadcast | null> {
+  const r = await db.prepare("SELECT * FROM broadcasts WHERE id = ?").bind(id).first<Row>();
+  return r ? broadcastFromRow(r) : null;
+}
+
+export interface BroadcastWork {
+  broadcastId: number;
+  chatId: number;
+  messageId: number | null;
+  state: "queued" | "delete_queued";
+  fromChatId: number;
+  fromMessageId: number;
+}
+
+/** Oldest-first rows still to copy or delete, across broadcasts. */
+export async function nextBroadcastWork(db: D1Database, limit: number): Promise<BroadcastWork[]> {
+  const { results } = await db
+    .prepare(
+      `SELECT m.broadcast_id, m.chat_id, m.message_id, m.state, b.from_chat_id, b.from_message_id
+       FROM broadcast_messages m JOIN broadcasts b ON b.id = m.broadcast_id
+       WHERE m.state IN ('queued', 'delete_queued')
+       ORDER BY m.broadcast_id, m.rowid LIMIT ?`,
+    )
+    .bind(limit)
+    .all<Row>();
+  return results.map((r) => ({
+    broadcastId: Number(r.broadcast_id),
+    chatId: Number(r.chat_id),
+    messageId: num(r.message_id),
+    state: String(r.state) as BroadcastWork["state"],
+    fromChatId: Number(r.from_chat_id),
+    fromMessageId: Number(r.from_message_id),
+  }));
+}
+
+/** Move one row out of `from` ('queued' or 'delete_queued'); false if it had already moved. */
+export async function setDelivery(
+  db: D1Database,
+  broadcastId: number,
+  chatId: number,
+  from: "queued" | "delete_queued",
+  to: "sent" | "failed" | "deleted" | "delete_failed",
+  f: { messageId?: number; error?: string } = {},
+): Promise<boolean> {
+  const res = await db
+    .prepare(
+      `UPDATE broadcast_messages SET state = ?, message_id = COALESCE(?, message_id), error = ?
+       WHERE broadcast_id = ? AND chat_id = ? AND state = ?`,
+    )
+    .bind(to, f.messageId ?? null, f.error ?? null, broadcastId, chatId, from)
+    .run();
+  return res.meta.changes === 1;
+}
+
+/** Broadcasts whose queue has drained: 'sending' with nothing queued, 'deleting' with nothing to delete. */
+export async function drainedBroadcasts(db: D1Database): Promise<Broadcast[]> {
+  const { results } = await db
+    .prepare(
+      `SELECT * FROM broadcasts b
+       WHERE (b.status = 'sending' AND NOT EXISTS
+                (SELECT 1 FROM broadcast_messages m WHERE m.broadcast_id = b.id AND m.state = 'queued'))
+          OR (b.status = 'deleting' AND NOT EXISTS
+                (SELECT 1 FROM broadcast_messages m WHERE m.broadcast_id = b.id AND m.state = 'delete_queued'))
+       ORDER BY b.id`,
+    )
+    .all<Row>();
+  return results.map(broadcastFromRow);
+}
+
+/** Compare-and-set a broadcast's status; true if it applied. */
+export async function setBroadcastStatus(
+  db: D1Database,
+  id: number,
+  from: BroadcastStatus,
+  to: BroadcastStatus,
+): Promise<boolean> {
+  const res = await db
+    .prepare("UPDATE broadcasts SET status = ? WHERE id = ? AND status = ?")
+    .bind(to, id, from)
+    .run();
+  return res.meta.changes === 1;
+}
+
+/** done -> deleting, queueing every delivered copy for deletion (atomic). False if not 'done'. */
+export async function startBroadcastDelete(db: D1Database, id: number, at: string): Promise<boolean> {
+  const [, res] = await db.batch([
+    db
+      .prepare(
+        `UPDATE broadcast_messages SET state = 'delete_queued'
+         WHERE broadcast_id = ? AND state = 'sent'
+           AND EXISTS (SELECT 1 FROM broadcasts WHERE id = ? AND status = 'done')`,
+      )
+      .bind(id, id),
+    db
+      .prepare("UPDATE broadcasts SET status = 'deleting', deleted_at = ? WHERE id = ? AND status = 'done'")
+      .bind(at, id),
+  ]);
+  return res.meta.changes === 1;
+}
+
+export interface BroadcastReport {
+  total: number;
+  sent: number;
+  deleted: number;
+  deleteFailed: number;
+  failed: { title: string; error: string }[];
+}
+
+export async function broadcastReport(db: D1Database, id: number): Promise<BroadcastReport> {
+  const c = await db
+    .prepare(
+      `SELECT COUNT(*) AS total,
+         COALESCE(SUM(message_id IS NOT NULL), 0) AS sent,
+         COALESCE(SUM(state = 'deleted'), 0) AS deleted,
+         COALESCE(SUM(state = 'delete_failed'), 0) AS delete_failed
+       FROM broadcast_messages WHERE broadcast_id = ?`,
+    )
+    .bind(id)
+    .first<Row>();
+  const { results } = await db
+    .prepare(
+      `SELECT COALESCE(a.display_name, a.title, CAST(m.chat_id AS TEXT)) AS title, COALESCE(m.error, '') AS error
+       FROM broadcast_messages m LEFT JOIN accounts a ON a.chat_id = m.chat_id
+       WHERE m.broadcast_id = ? AND m.state = 'failed' ORDER BY m.rowid LIMIT 20`,
+    )
+    .bind(id)
+    .all<Row>();
+  return {
+    total: Number(c?.total ?? 0),
+    sent: Number(c?.sent ?? 0),
+    deleted: Number(c?.deleted ?? 0),
+    deleteFailed: Number(c?.delete_failed ?? 0),
+    failed: results.map((r) => ({ title: String(r.title), error: String(r.error) })),
+  };
+}
+
+/** Delete the user's state only if it is `state`, returning its data (null if absent/different). */
+export async function takeUserState(db: D1Database, userId: number, state: string): Promise<unknown | null> {
+  const r = await db
+    .prepare("DELETE FROM user_state WHERE user_id = ? AND state = ? RETURNING data_json")
+    .bind(userId, state)
+    .first<Row>();
+  return r ? (JSON.parse(String(r.data_json)) ?? {}) : null;
+}
