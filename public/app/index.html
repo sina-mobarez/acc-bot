@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+  <title>پنل مدیریت</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;600;700&display=swap">
+  <link rel="stylesheet" href="app.css">
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+</head>
+<body>
+  <header class="top">
+    <span id="title" class="top-title">داشبورد</span>
+    <span id="price" class="muted"></span>
+  </header>
+  <main id="view"></main>
+  <nav class="tabs" id="tabs">
+    <button data-tab="dash" class="on">داشبورد</button>
+    <button data-tab="clients">مشتری‌ها</button>
+    <button data-tab="deals">معاملات</button>
+    <button data-tab="settings">تنظیمات</button>
+  </nav>
+  <div id="modal" class="modal" hidden></div>
+  <div id="toast" class="toast" hidden></div>
+  <script type="module" src="app.js"></script>
+</body>
+</html>
