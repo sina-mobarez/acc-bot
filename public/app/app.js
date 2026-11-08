@@ -128,7 +128,7 @@ function owedLines(owed) {
 const view = $("view");
 function render(title, ...nodes) {
   $("title").textContent = title;
-  view.replaceChildren(...nodes);
+  view.replaceChildren(...nodes.flat(Infinity).filter((n) => n !== null && n !== undefined && n !== false));
   window.scrollTo(0, 0);
 }
 const loading = () => view.replaceChildren(h("div", { class: "empty" }, "در حال بارگذاری…"));
