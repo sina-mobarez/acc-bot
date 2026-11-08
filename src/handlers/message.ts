@@ -229,8 +229,7 @@ async function dispatch(c: Ctx, action: Action, joke: string | undefined, out: N
         createdById: msg.from?.id ?? 0,
         createdAt: app.now(),
       });
-      const d = deviation(c, e.trade);
-      const card = renderEntry(e, { ref: d?.ref ?? null, deviationPct: d?.dev ?? null, alertPct: c.alertPct });
+      const card = renderEntry(e);
       await setCardMessage(app.db, e.id, await sendCard(c, [e.id], card, entryKeyboard(e)));
       return;
     }

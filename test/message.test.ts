@@ -90,7 +90,7 @@ describe("fast path", () => {
     expect(call.parse_mode).toBe("HTML");
     expect(call.reply_parameters).toEqual({ message_id: m.message_id, allow_sending_without_reply: true });
     expect(lastButtons(a)).toContain(`ok:${e.id}`);
-    expect(lastText(a)).toContain("قیمت نوبیتکس");
+    expect(lastText(a)).not.toContain("نوبیتکس"); // owner: no Nobitex price on cards
     expect(e.cardMsgId).toBe(1); // FakeTg's first message_id
     expect(a.nlu.inputs).toHaveLength(0); // no deviation, no Gemini call
   });
@@ -107,7 +107,7 @@ describe("fast path", () => {
     expect(lastButtons(a)).toContain(`ok:${e.id}`);
   });
 
-  test("# trade with 5% deviation shows warning and asks nlu for a joke", async () => {
+  test("# trade with 5% deviation asks nlu for a joke; card has no Nobitex line", async () => {
     const chat = freshGroup();
     const a = app(nlu({ intent: "create_trade", joke: "گرون <b>فروشی</b>" }));
     const m = msg(chat, ADMIN, "#فروش ۱۰۰ تتر ۲۷۹۳۰۰");
@@ -117,8 +117,8 @@ describe("fast path", () => {
     expect(a.nlu.inputs[0].deviationPct).toBe("3");
     expect(a.nlu.inputs[0].usdtToman).toBe("266000");
     const text = lastText(a);
-    expect(text).toContain("⚠️");
-    expect(text).toContain("+۵٪");
+    expect(text).not.toContain("نوبیتکس");
+    expect(text).not.toContain("+۵٪");
     expect(text).toContain("گرون &lt;b&gt;فروشی&lt;/b&gt;");
     const [e] = await recent(db, chat.id, 5);
     expect(e.joke).toBe("گرون <b>فروشی</b>");

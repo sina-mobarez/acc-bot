@@ -54,14 +54,10 @@ export function jalaliDate(iso: string): string {
 }
 
 const money = (v: Decimal): string => fa(v);
-const pct = (v: Decimal): string => fa(v.abs().toDecimalPlaces(1));
 
 export interface EntryOpts {
   error?: string;
   confirmCancel?: boolean;
-  ref?: Decimal | null;
-  deviationPct?: Decimal | null;
-  alertPct?: Decimal;
 }
 
 export function renderEntry(e: Entry, o: EntryOpts = {}): string {
@@ -85,14 +81,6 @@ export function renderEntry(e: Entry, o: EntryOpts = {}): string {
   if (t.rate !== null && !byToman(t) && total) {
     lines.push(`💵 <b>قیمت واحد:</b> ${money(t.rate)} تومان`);
     lines.push(`🧾 <b>مبلغ کل:</b> ${money(total)} تومان`);
-  }
-  if (o.ref && t.rate !== null && !isPayment(t)) {
-    const dev = o.deviationPct;
-    const alert = dev && dev.abs().gt(o.alertPct ?? new Decimal(3));
-    let l = `📊 <b>قیمت نوبیتکس:</b> ${money(o.ref)} تومان`;
-    if (dev) l += ` (${dev.isNegative() ? "−" : "+"}${pct(dev)}٪)`;
-    if (alert) l += " ⚠️";
-    lines.push(l);
   }
   if (t.note) lines.push(`📝 <b>توضیحات:</b> ${escapeHtml(t.note)}`);
 

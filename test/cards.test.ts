@@ -63,12 +63,8 @@ describe("renderEntry", () => {
     expect(renderEntry(entry({ trade: t }))).toContain("۵۰۰٬۰۰۰٬۰۰۰ ÷ ۲۶۴٬۰۰۰");
   });
 
-  it("warns and shows the Nobitex price above the alert threshold only", () => {
-    const o = { ref: D(250000), alertPct: D(3) };
-    const high = renderEntry(entry(), { ...o, deviationPct: D("6.4") });
-    expect(high).toContain("⚠️");
-    expect(high).toContain("۲۵۰٬۰۰۰");
-    expect(renderEntry(entry(), { ...o, deviationPct: D(3) })).not.toContain("⚠️");
+  it("never shows the Nobitex price on a deal card (owner request)", () => {
+    expect(renderEntry(entry())).not.toContain("نوبیتکس");
   });
 
   it("escapes user-supplied text", () => {
