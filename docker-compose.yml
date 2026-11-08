@@ -1,0 +1,25 @@
+# Telegram is blocked from pingi-stage, so the bot joins pingi-bot's network and
+# uses its sing-box container (pingi-xray) as a SOCKS5 proxy. Google Sheets is
+# reachable directly.
+services:
+  bot:
+    build: .
+    container_name: acc-bot
+    restart: unless-stopped
+    env_file: [.env]
+    environment:
+      PROXY_URL: socks5h://pingi-xray:1080
+      DB_PATH: /data/deals.db
+      GOOGLE_CREDENTIALS_FILE: /app/secrets/credentials.json
+    volumes:
+      - accdata:/data
+      - ./secrets:/app/secrets:ro
+    networks: [pingi]
+
+networks:
+  pingi:
+    name: pingi-bot_botnet
+    external: true
+
+volumes:
+  accdata:

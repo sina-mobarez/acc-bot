@@ -1,0 +1,17 @@
+[project]
+name = "acc-bot"
+version = "0.2.0"
+description = "Telegram bot that records trades from group chats into SQLite and Google Sheets"
+requires-python = ">=3.11"
+dependencies = [
+    "python-telegram-bot[socks]>=22.0,<23",
+    "gspread>=6.1,<7",
+    "python-dotenv>=1.0",
+    "jdatetime>=5.0",
+]
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
