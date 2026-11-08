@@ -19,3 +19,31 @@ export function fakeFetch(routes: FakeRoutes): typeof fetch {
     });
   }) as typeof fetch;
 }
+
+import type { Tg } from "../src/telegram";
+
+/** Scriptable Telegram: records calls, default result `{ message_id: n++ }`. */
+export class FakeTg implements Tg {
+  calls: { method: string; params: Record<string, unknown> }[] = [];
+  private handlers = new Map<string, (params: Record<string, any>) => unknown>();
+  private failures: { method: string; chatId: unknown; err: Error }[] = [];
+  private nextId = 1;
+
+  reply(method: string, fn: (params: Record<string, any>) => unknown): void {
+    this.handlers.set(method, fn);
+  }
+
+  /** Make `method` throw `err` for calls addressed to `chatId`. */
+  fail(method: string, chatId: unknown, err: Error): void {
+    this.failures.push({ method, chatId, err });
+  }
+
+  async call<T = any>(method: string, params: Record<string, unknown>): Promise<T> {
+    this.calls.push({ method, params });
+    const failure = this.failures.find((x) => x.method === method && x.chatId === params.chat_id);
+    if (failure) throw failure.err;
+    const h = this.handlers.get(method);
+    if (h) return (await h(params)) as T;
+    return { message_id: this.nextId++ } as T;
+  }
+}
