@@ -95,3 +95,15 @@ describe("gemini nlu", () => {
     expect(seen!.body.contents[0].parts[0].text).toContain("۱۰۰ تتر خریدم");
   });
 });
+
+describe("response schema", () => {
+  test("every field is required (nullable) so the lite model can't skip the amount", async () => {
+    const { RESPONSE_SCHEMA } = await import("../src/nlu");
+    const props = Object.keys(RESPONSE_SCHEMA.properties);
+    expect([...RESPONSE_SCHEMA.required].sort()).toEqual([...props].sort());
+    for (const k of props.filter((k) => k !== "intent")) {
+      expect((RESPONSE_SCHEMA.properties as Record<string, { nullable?: boolean }>)[k].nullable).toBe(true);
+    }
+    expect(RESPONSE_SCHEMA.propertyOrdering[0]).toBe("intent");
+  });
+});

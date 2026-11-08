@@ -75,6 +75,11 @@ The user message contains labeled JSON sections: message text, role, chat type, 
 
 const str = (extra: Record<string, unknown> = {}) => ({ type: "STRING", nullable: true, ...extra });
 
+const FIELD_ORDER = [
+  "intent", "side", "direction", "amount_text", "amount_unit", "asset", "rate_text", "note",
+  "deal_code", "changes", "coins", "client_hint", "reply", "joke",
+] as const;
+
 export const RESPONSE_SCHEMA = {
   type: "OBJECT",
   properties: {
@@ -97,7 +102,10 @@ export const RESPONSE_SCHEMA = {
     reply: str(),
     joke: str(),
   },
-  required: ["intent"],
+  // Every field is required (nullable): the lite model otherwise skips optional
+  // fields and returned only {intent, side} for 3 of 4 trade messages (measured).
+  required: [...FIELD_ORDER],
+  propertyOrdering: [...FIELD_ORDER],
 };
 
 const STR_FIELDS = ["amount_text", "asset", "rate_text", "note", "deal_code", "client_hint", "reply", "joke"];

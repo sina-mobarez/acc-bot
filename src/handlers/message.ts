@@ -199,6 +199,9 @@ export async function handleMessage(app: App, msg: Message, text: string): Promi
       if (card) out = { ...out, deal_code: card.code };
     }
     action = toAction(out, { role, usdtToman: usdt?.latest ?? null, defaultAsset });
+    if (action.kind === "reply" && (out.intent === "create_trade" || out.intent === "record_payment")) {
+      console.warn("nlu: incomplete write intent", JSON.stringify(out));
+    }
     joke = c.humor ? out.joke?.trim() || undefined : undefined;
     if (c.humor && !joke && action.kind === "create") joke = fallbackJoke(c, action.trade);
   }
