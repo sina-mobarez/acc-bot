@@ -59,8 +59,6 @@ export function applyMult(text: string, mult?: string): Decimal {
   return mult ? value.mul(MULTIPLIERS[mult.toLowerCase()]) : value;
 }
 
-const AMOUNT_RE = new RegExp(`^(${NUM})\\s*(?:(${MULT})${WORD_END})?(?:\\s+(.+))?$`, "iu");
-
 // Words an LLM copies along with an amount ("۱۰۰ تا تتر", "۲۷۶ هزار تومن"); ignored, the unit comes from amount_unit.
 const UNIT_WORDS: ReadonlySet<string> = new Set([
   "تا", "عدد",
@@ -69,16 +67,57 @@ const UNIT_WORDS: ReadonlySet<string> = new Set([
   "usdt", "usd", "eur", "aed", "try", "irt",
 ]);
 
-/** "۲ میلیون" -> 2000000, "275k" -> 275000, "2,500,000" -> 2500000; null if not an amount. */
+const NUM_TOKEN = new RegExp(`^${NUM}$`, "u");
+const MULT_TOKEN = new RegExp(`^(?:${MULT})$`, "iu");
+// "5/232/456/876" or "5.232.456.876": two or more separators, all 3-digit groups -> thousands.
+const GROUPED = /^\d{1,3}(?:([\/.])\d{3})(?:\1\d{3})+$/;
+
+function numberToken(t: string): string | null {
+  if (GROUPED.test(t)) return t.replace(/[\/.]/g, "");
+  const dec = t.replace("/", "."); // a single Persian decimal slash: "۱/۵" = 1.5
+  return NUM_TOKEN.test(dec) ? dec : null;
+}
+
+/**
+ * "۲ میلیون" -> 2000000, "275k" -> 275000, "2,500,000" -> 2500000,
+ * "۵ میلیارد و ۲۳۲ میلیون" -> 5232000000, "۵/۲۳۲/۴۵۶/۸۷۶" -> 5232456876; null if not an amount.
+ * Unit words an LLM copies along ("تا", "تتر", "تومن") may trail; the unit comes from amount_unit.
+ */
 export function parseAmountText(s: string): Decimal | null {
-  const m = AMOUNT_RE.exec(normalize(s).trim());
-  if (!m) return null;
-  if (m[3] && !m[3].trim().split(/\s+/).every((w) => UNIT_WORDS.has(w.toLowerCase()))) return null;
-  try {
-    return applyMult(m[1], m[2]);
-  } catch {
-    return null;
+  const tokens = normalize(s)
+    .trim()
+    .replace(new RegExp(`(\\d)(${MULT})${WORD_END}`, "giu"), "$1 $2") // "۵میلیارد" -> "۵ میلیارد"
+    .split(/\s+/)
+    .filter(Boolean);
+  let i = 0;
+  let total = new Decimal(0);
+  let parts = 0;
+  let lastMult: Decimal | null = null; // parts must go from larger to smaller multipliers
+  while (i < tokens.length) {
+    if (parts > 0 && tokens[i] === "و") i++;
+    const num = tokens[i] !== undefined ? numberToken(tokens[i]) : null;
+    if (num === null) break;
+    i++;
+    let mult: Decimal | null = null;
+    if (tokens[i] !== undefined && MULT_TOKEN.test(tokens[i])) mult = MULTIPLIERS[tokens[i++].toLowerCase()];
+    // A bare number may only be the last part: "۵ ۲۳۲" is not an amount.
+    if (mult === null && i < tokens.length && (tokens[i] === "و" || numberToken(tokens[i]) !== null)) return null;
+    if (mult !== null && lastMult !== null && mult.gte(lastMult)) return null;
+    if (mult === null && lastMult !== null && lastMult.lte(1)) return null;
+    let v: Decimal;
+    try {
+      v = new Decimal(num.replace(/,/g, ""));
+    } catch {
+      return null;
+    }
+    total = total.plus(mult ? v.mul(mult) : v);
+    lastMult = mult ?? new Decimal(1);
+    parts++;
   }
+  if (parts === 0) return null;
+  const rest = tokens.slice(i);
+  if (!rest.every((w) => UNIT_WORDS.has(w.toLowerCase()))) return null;
+  return total;
 }
 
 /** 1234567.5 -> "1,234,567.5"; drops trailing zeros. */
