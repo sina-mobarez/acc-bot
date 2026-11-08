@@ -23,7 +23,7 @@ One Worker, `src/index.ts`:
 - `POST /tg`: Telegram webhook, checked via the `X-Telegram-Bot-Api-Secret-Token` header. It acks immediately and does the work in `ctx.waitUntil`; `update_id` is deduped in D1.
 - `POST /setup`: same secret header. Calls getMe, setWebhook, commands and the menu button, and stores `bot_id`, `bot_username` and `public_url` in settings.
 - `GET /health/prices`; `/api/*`: the Mini App admin API (`Authorization: tma <initData>`, validated in `miniapp/auth.ts`); everything else is static assets (Mini App at `/app/`, from `public/app`).
-- Cron every minute (`cron.ts`): daily debtor reminders at 10:00 Tehran (UTC+03:30), broadcast batches, and pruning of processed updates.
+- Cron every minute (`cron.ts`): daily debtor reminders at 10:00 Tehran (UTC+03:30), broadcast batches, and pruning of processed updates. Each step is isolated (a failure is logged, the others still run). Broadcasts are sent only from the cron, never from the webhook.
 - D1 database `acc-bot` (binding `DB`), schema in `migrations/`.
 
 Message flow: `handlers/update.ts` (dedupe, routing) → `handlers/message.ts` → either `parser.ts` (`#` grammar) or `nlu.ts` (Gemini) → `intent.ts` turns the NLU output plus the sender's role into an `Action` → the handler executes it and renders with `cards.ts`. `handlers/callback.ts` runs the card buttons, `handlers/commands.ts` the slash commands.
@@ -37,7 +37,9 @@ Other modules: `money.ts` (Decimal, normalize), `trade.ts` (types), `ledger.ts` 
 - **Money is `Decimal`** (decimal.js, precision 40) in memory and TEXT in D1. Never use a JS `number` for money. A toman-denominated trade (`tomanTotal`) must have a rate.
 - **Ledger sign convention** is from our side: `owed > 0` means the client owes us. BUY: client owes the asset, we owe toman. SELL: the reverse. PAY is `+`, RECEIVE is `−`.
 - **Status changes only through the compare-and-set `transition`** in `db.ts`. It is the guard against double taps and races.
-- **Permissions.** Clients see only their own chat and cannot write. Admins are the `ADMIN_IDS` secret plus the `admins` table; Telegram group-admin status grants nothing. Broadcast never falls back to "anyone".
+- **Permissions.** Clients see only their own chat and cannot write. Admins are the `ADMIN_IDS` secret (may be unset) plus the `admins` table; Telegram group-admin status grants nothing. Broadcast never falls back to "anyone".
+- **Strangers get nothing.** In a private chat a non-admin is answered only for `/id`, `/help` and `/start`; everything else is dropped in `handlers/update.ts` before any Gemini or Nobitex call. A group serves anyone only once `accounts.activated = 1`, set when an admin speaks there or adds the bot (sticky). `listAccounts` and broadcast recipients include activated accounts only, so reminders, broadcasts, `/groups` and the Mini App skip the rest.
+- **Edits are deltas.** An edit proposal stores only the requested changes; applying it re-runs `applyTradeEdit` on the entry's current trade.
 - **Own-key-safe lookups.** Use `Map` or `Object.hasOwn` for anything keyed by user or LLM text (never `obj[key]` on a plain object).
 - **Escape output.** All user and LLM text going into HTML messages is HTML-escaped.
 - **Free-plan budget.** Free Workers allow ~50 external subrequests and ~50 D1 queries per invocation. The cron jobs (reminders, broadcast, prune) share one per-invocation `Budget` (`INVOCATION_BUDGET` in `src/constants.ts`); each Telegram call and D1 statement takes from it. Keep new cron work inside it.

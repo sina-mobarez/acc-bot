@@ -1,4 +1,4 @@
-/** Persian rendering (Telegram HTML): cards, keyboards, lists, balances, prices. Mirrors v1 accbot/card.py. */
+/** Persian rendering (Telegram HTML): cards, keyboards, lists, balances, prices. Layout follows the v1 Python cards (see git history). */
 import Decimal from "decimal.js";
 import { dealCode, type Entry, type Status } from "./db";
 import type { Account, Leg } from "./ledger";
