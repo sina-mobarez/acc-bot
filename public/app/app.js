@@ -92,6 +92,11 @@ function confirmAsk(msg) {
   });
 }
 
+/** Two-step confirmation for permanent deletes. */
+async function confirmDelete(what) {
+  return (await confirmAsk(`${what} حذف شود؟`)) && (await confirmAsk("این کار برگشت‌پذیر نیست. مطمئنی؟"));
+}
+
 function openModal(title, content) {
   const m = $("modal");
   m.replaceChildren(h("div", { class: "sheet" }, h("h2", {}, title), content));
@@ -213,6 +218,17 @@ async function showClient() {
     d.entries.length
       ? h("div", { class: "list" }, d.entries.map((e) => dealRow(e, { client: false, refresh: showClient })))
       : h("div", { class: "empty" }, "سابقه‌ای نیست."),
+    h("div", { style: "height:16px" }),
+    h("button", { class: "btn danger", onclick: async (ev) => {
+      if (!(await confirmDelete("این مشتری"))) return;
+      ev.target.disabled = true;
+      if (await attempt(() => api("DELETE", `/api/accounts/${clientId}`))) {
+        toast("حذف شد.");
+        clientId = null;
+        await loadNames().catch(() => {});
+        showTab();
+      } else ev.target.disabled = false;
+    } }, "🗑 حذف مشتری"),
   );
 }
 
@@ -274,12 +290,16 @@ function dealRow(e, { client, refresh }) {
       if (await confirmAsk(`«${e.code}» لغو شود؟`)) await post(`/api/entries/${e.id}/cancel`, "لغو شد.");
     }));
   }
+  actions.push(act("🗑 حذف", "danger", async () => {
+    if (!(await confirmDelete("این مورد"))) return;
+    if (await attempt(() => api("DELETE", `/api/entries/${e.id}`))) { toast("حذف شد."); refresh(); }
+  }));
   return h("div", { class: "row" },
     h("div", { class: "grow" },
       h("div", {}, title, h("span", { class: `pill ${e.status}` }, STATUS[e.status] ?? e.status)),
       h("div", { class: "muted" }, sub),
       h("div", { class: "muted" }, jdate(e.createdAt)),
-      actions.length ? h("div", { class: "actions" }, actions) : null));
+      h("div", { class: "actions" }, actions)));
 }
 
 function editModal(e, isPay, refresh) {

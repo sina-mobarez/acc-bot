@@ -38,6 +38,8 @@ Broadcast is admin-only. There is no "anyone" fallback.
 
 Opened from the bot's menu button or `/app`. Tabs: **داشبورد** (totals and KPIs), **مشتری‌ها** (accounts, balances), **معاملات** (deals with approve/reject/cancel), **تنظیمات** (admins, the price-deviation threshold and the reminder default). The «پنل مدیریت» menu button appears only in admins' private chats; everyone else sees the command menu.
 
+Deals, payments and customers can be deleted from the Mini App. Deletion is permanent (rows are removed, not hidden) and asks for two confirmations; a deleted deal's payments stay and fall back to FIFO.
+
 The Mini App is served from `*.workers.dev`, which is usually filtered in Iran, so admins need a VPN to open it. The bot itself works without one.
 
 ## Setup

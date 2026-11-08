@@ -101,7 +101,7 @@ describe("auth", () => {
     for (const [m, p] of [
       ["GET", "/api/dashboard"], ["GET", "/api/accounts"], ["GET", `/api/accounts/${chat}`],
       ["PATCH", `/api/accounts/${chat}`], ["POST", `/api/accounts/${chat}/payments`], ["GET", "/api/entries"],
-      ["POST", "/api/entries/1/approve"], ["POST", "/api/entries/1/cancel"], ["PATCH", "/api/entries/1"],
+      ["DELETE", "/api/entries/1"], ["DELETE", `/api/accounts/${chat}`], ["POST", "/api/entries/1/approve"], ["POST", "/api/entries/1/cancel"], ["PATCH", "/api/entries/1"],
       ["GET", "/api/admins"], ["POST", "/api/admins"], ["DELETE", "/api/admins/5"],
       ["GET", "/api/settings"], ["PATCH", "/api/settings"],
     ]) {
@@ -316,6 +316,52 @@ describe("entries", () => {
     const chat = await newAccount();
     const e = await mk(chat, deal());
     expect((await call(appFor(), "POST", `/api/entries/${e.id}/cancel`)).json.entry.status).toBe("cancelled");
+  });
+});
+
+describe("permanent delete", () => {
+  test("DELETE entry removes it, edits the card without buttons and changes the balance", async () => {
+    const chat = await newAccount();
+    const d = await approved(chat, deal({ rate: null }));
+    const p = await approved(chat, pay({ amount: D(40) }), { linkedDealId: d.id });
+    await setCardMessage(db, d.id, 55);
+    const app = appFor();
+    const owed = async () => (await call(app, "GET", `/api/accounts/${chat}`)).json.account.owed;
+    expect(await owed()).toEqual({ USDT: "60" });
+    app.tg.calls.length = 0;
+    const r = await call(app, "DELETE", `/api/entries/${d.id}`);
+    expect(r).toEqual({ status: 200, json: { ok: true } });
+    expect(await getEntry(db, d.id)).toBeNull();
+    expect((await getEntry(db, p.id))!.linkedDealId).toBeNull();
+    expect(app.tg.calls.map((c) => c.method)).toEqual(["editMessageText"]);
+    expect(app.tg.calls[0].params).toMatchObject({ chat_id: chat, message_id: 55, text: "🗑 این مورد از پنل مدیریت حذف شد" });
+    expect(app.tg.calls[0].params.reply_markup).toBeUndefined();
+    expect(await owed()).toEqual({ USDT: "-40" });
+    expect((await call(app, "DELETE", `/api/entries/${d.id}`)).status).toBe(404);
+  });
+
+  test("a Telegram failure on the card edit does not fail the delete", async () => {
+    const chat = await newAccount();
+    const e = await mk(chat, deal());
+    await setCardMessage(db, e.id, 56);
+    const app = appFor();
+    app.tg.fail("editMessageText", chat, new TgError(400, "gone"));
+    expect((await call(app, "DELETE", `/api/entries/${e.id}`)).status).toBe(200);
+    expect(await getEntry(db, e.id)).toBeNull();
+  });
+
+  test("DELETE account removes it from the list and the dashboard totals", async () => {
+    const chat = await newAccount("حذفی");
+    await approved(chat, pay({ side: "PAY", asset: "IRT", amount: D(10_000_000) }));
+    const app = appFor();
+    const before = (await call(app, "GET", "/api/dashboard")).json.receivable.IRT;
+    app.tg.calls.length = 0;
+    expect(await call(app, "DELETE", `/api/accounts/${chat}`)).toEqual({ status: 200, json: { ok: true } });
+    expect(app.tg.calls).toHaveLength(0);
+    expect((await call(app, "GET", "/api/accounts?archived=1")).json.accounts.some((a: any) => a.chatId === chat)).toBe(false);
+    const after = (await call(app, "GET", "/api/dashboard")).json.receivable.IRT ?? "0";
+    expect(new Decimal(before).minus(after).toFixed()).toBe("10000000");
+    expect((await call(app, "DELETE", `/api/accounts/${chat}`)).status).toBe(404);
   });
 });
 

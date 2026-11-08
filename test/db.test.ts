@@ -8,6 +8,8 @@ import {
   cancelEntry,
   createEntry,
   createPendingAction,
+  deleteAccount,
+  deleteEntry,
   dealCode,
   editEntry,
   getAccount,
@@ -29,6 +31,7 @@ import {
   updateAccount,
   upsertAccount,
 } from "../src/db";
+import { summarize } from "../src/ledger";
 import type { Trade } from "../src/trade";
 
 const db = env.DB;
@@ -270,5 +273,70 @@ describe("unlinkPayments", () => {
     expect(await unlinkPayments(db, d.id)).toBe(1);
     expect((await getEntry(db, approved.id))!.linkedDealId).toBeNull();
     expect((await getEntry(db, pending.id))!.linkedDealId).toBe(d.id);
+  });
+});
+
+describe("deleteEntry", () => {
+  const count = async (sql: string, ...b: unknown[]) =>
+    (await db.prepare(sql).bind(...b).first<{ n: number }>())!.n;
+
+  test("unlinks payments (they stay), removes events and pending actions, returns the entry", async () => {
+    const chat = freshChat();
+    const d = await mk(chat, trade(), { status: "approved" });
+    const p = await mk(chat, trade({ side: "RECEIVE", rate: null }), { linkedDealId: d.id, status: "approved" });
+    await editEntry(db, d.id, trade({ amount: D(5) }), "x", AT);
+    await createPendingAction(db, {
+      chatId: chat, kind: "edit", entryId: d.id, payload: {}, createdBy: 1, createdAt: AT,
+    });
+    const gone = await deleteEntry(db, d.id);
+    expect(gone?.id).toBe(d.id);
+    expect(await getEntry(db, d.id)).toBeNull();
+    expect((await getEntry(db, p.id))!.linkedDealId).toBeNull();
+    expect(await count("SELECT COUNT(*) AS n FROM entry_events WHERE entry_id = ?", d.id)).toBe(0);
+    expect(await count("SELECT COUNT(*) AS n FROM pending_actions WHERE entry_id = ?", d.id)).toBe(0);
+    expect(await deleteEntry(db, d.id)).toBeNull();
+  });
+
+  test("deleting a payment changes the balance", async () => {
+    const chat = freshChat();
+    await mk(chat, trade({ side: "PAY", asset: "IRT", amount: D(1000), rate: null }), { status: "approved" });
+    const p = await mk(chat, trade({ side: "RECEIVE", asset: "IRT", amount: D(400), rate: null }), { status: "approved" });
+    const owed = async () => summarize((await approvedLedger(db, chat)).map((l) => l.trade)).owed.get("IRT")!;
+    expect(owed().then((v) => v.toFixed())).resolves.toBe("600");
+    await deleteEntry(db, p.id);
+    expect((await owed()).toFixed()).toBe("1000");
+  });
+});
+
+describe("deleteAccount", () => {
+  test("removes every row of the chat and nothing of another", async () => {
+    const a = freshChat();
+    const b = freshChat();
+    for (const c of [a, b]) {
+      await upsertAccount(db, { chatId: c, title: "t", type: "supergroup", at: AT, activated: true });
+    }
+    const ea = await mk(a);
+    const eb = await mk(b);
+    await editEntry(db, ea.id, trade({ amount: D(5) }), "x", AT);
+    await editEntry(db, eb.id, trade({ amount: D(5) }), "x", AT);
+    await createPendingAction(db, {
+      chatId: a, kind: "edit", entryId: ea.id, payload: {}, createdBy: 1, createdAt: AT,
+    });
+    await db.batch([
+      db.prepare("INSERT INTO broadcast_messages (broadcast_id, chat_id) VALUES (9001, ?)").bind(a),
+      db.prepare("INSERT INTO broadcast_messages (broadcast_id, chat_id) VALUES (9001, ?)").bind(b),
+    ]);
+    expect(await deleteAccount(db, a)).toBe(true);
+    const n = async (sql: string, ...x: unknown[]) => (await db.prepare(sql).bind(...x).first<{ n: number }>())!.n;
+    expect(await getAccount(db, a)).toBeNull();
+    expect(await n("SELECT COUNT(*) AS n FROM entries WHERE chat_id = ?", a)).toBe(0);
+    expect(await n("SELECT COUNT(*) AS n FROM entry_events WHERE entry_id = ?", ea.id)).toBe(0);
+    expect(await n("SELECT COUNT(*) AS n FROM pending_actions WHERE chat_id = ?", a)).toBe(0);
+    expect(await n("SELECT COUNT(*) AS n FROM broadcast_messages WHERE chat_id = ?", a)).toBe(0);
+    expect(await getAccount(db, b)).not.toBeNull();
+    expect(await getEntry(db, eb.id)).not.toBeNull();
+    expect(await n("SELECT COUNT(*) AS n FROM entry_events WHERE entry_id = ?", eb.id)).toBe(1);
+    expect(await n("SELECT COUNT(*) AS n FROM broadcast_messages WHERE chat_id = ?", b)).toBe(1);
+    expect(await deleteAccount(db, a)).toBe(false);
   });
 });

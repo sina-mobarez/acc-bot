@@ -3,7 +3,7 @@ import Decimal from "decimal.js";
 import type { App } from "../app";
 import { entryKeyboard, renderEntry } from "../cards";
 import {
-  type Account, accountName, addAdmin, allApprovedByChat, approvedLedger, createEntry, editEntry, type Entry,
+  type Account, accountName, addAdmin, allApprovedByChat, approvedLedger, createEntry, deleteAccount, deleteEntry, editEntry, type Entry,
   getAccount, getEntry, getSetting, isAdmin, listAccounts, listAdmins, listEntries, recent, removeAdmin,
   setSetting, type Status, transition, updateAccount,
 } from "../db";
@@ -329,6 +329,26 @@ async function cancel({ app, actor }: Ctx, id: number) {
   return { entry: entryJson(fresh), unlinked: note !== "" };
 }
 
+const DELETED_CARD = "🗑 این مورد از پنل مدیریت حذف شد";
+
+async function removeEntry({ app }: Ctx, id: number) {
+  const gone = await deleteEntry(app.db, id);
+  if (!gone) throw notFound("این مورد پیدا نشد.");
+  if (gone.cardMsgId !== null) {
+    try {
+      await app.tg.call("editMessageText", { chat_id: gone.chatId, message_id: gone.cardMsgId, text: DELETED_CARD });
+    } catch (err) {
+      if (!(err instanceof TgError)) throw err;
+    }
+  }
+  return { ok: true };
+}
+
+async function removeAccount({ app }: Ctx, chatId: number) {
+  if (!(await deleteAccount(app.db, chatId))) throw notFound("این مشتری پیدا نشد.");
+  return { ok: true };
+}
+
 async function patchEntry({ app, req, actor }: Ctx, id: number) {
   const b = await bodyOf(req);
   const cur = await entryOrThrow(app, id);
@@ -417,6 +437,7 @@ async function route(c: Ctx): Promise<unknown> {
   if ((r = /^\/api\/accounts\/(-?\d+)$/.exec(pathname))) {
     if (m === "GET") return accountDetail(c, Number(r[1]));
     if (m === "PATCH") return patchAccount(c, Number(r[1]));
+    if (m === "DELETE") return removeAccount(c, Number(r[1]));
   }
   if (m === "POST" && (r = /^\/api\/accounts\/(-?\d+)\/payments$/.exec(pathname))) return postPayment(c, Number(r[1]));
   if (m === "GET" && pathname === "/api/entries") return entriesList(c);
@@ -425,7 +446,10 @@ async function route(c: Ctx): Promise<unknown> {
     if (r[2] === "cancel") return cancel(c, id);
     return decide(c, id, r[2] === "approve" ? "approved" : "rejected");
   }
-  if (m === "PATCH" && (r = /^\/api\/entries\/(\d+)$/.exec(pathname))) return patchEntry(c, Number(r[1]));
+  if ((r = /^\/api\/entries\/(\d+)$/.exec(pathname))) {
+    if (m === "PATCH") return patchEntry(c, Number(r[1]));
+    if (m === "DELETE") return removeEntry(c, Number(r[1]));
+  }
   if (pathname === "/api/admins") {
     if (m === "GET") return adminsOf(c.app);
     if (m === "POST") return adminAdd(c);

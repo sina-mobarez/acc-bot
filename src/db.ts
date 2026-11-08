@@ -299,6 +299,35 @@ export async function unlinkPayments(db: D1Database, dealId: number): Promise<nu
   return res.meta.changes;
 }
 
+/**
+ * Permanently delete an entry (hard delete). Payments linked to it stay and fall back to FIFO.
+ * One batch, so a partial delete is impossible. Returns the deleted entry, or null if it was missing.
+ */
+export async function deleteEntry(db: D1Database, id: number): Promise<Entry | null> {
+  const entry = await getEntry(db, id);
+  if (!entry) return null;
+  await db.batch([
+    db.prepare("UPDATE entries SET linked_deal_id = NULL WHERE linked_deal_id = ?").bind(id),
+    db.prepare("DELETE FROM entry_events WHERE entry_id = ?").bind(id),
+    db.prepare("DELETE FROM pending_actions WHERE entry_id = ?").bind(id),
+    db.prepare("DELETE FROM entries WHERE id = ?").bind(id),
+  ]);
+  return entry;
+}
+
+/** Permanently delete a customer and everything recorded for its chat, atomically. */
+export async function deleteAccount(db: D1Database, chatId: number): Promise<boolean> {
+  if (!(await getAccount(db, chatId))) return false;
+  await db.batch([
+    db.prepare("DELETE FROM entry_events WHERE entry_id IN (SELECT id FROM entries WHERE chat_id = ?)").bind(chatId),
+    db.prepare("DELETE FROM pending_actions WHERE chat_id = ?").bind(chatId),
+    db.prepare("DELETE FROM entries WHERE chat_id = ?").bind(chatId),
+    db.prepare("DELETE FROM broadcast_messages WHERE chat_id = ?").bind(chatId),
+    db.prepare("DELETE FROM accounts WHERE chat_id = ?").bind(chatId),
+  ]);
+  return true;
+}
+
 export async function recent(db: D1Database, chatId: number, limit: number): Promise<Entry[]> {
   const { results } = await db
     .prepare("SELECT * FROM entries WHERE chat_id = ? ORDER BY id DESC LIMIT ?")
