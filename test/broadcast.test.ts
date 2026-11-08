@@ -5,7 +5,7 @@ import {
   handleBroadcastCallback, onBroadcastCapture, onBroadcastCommand, onCancelCommand, onGroupsCommand,
   runBroadcastBatch,
 } from "../src/broadcast";
-import { BATCH_SIZE } from "../src/constants";
+import { Budget, INVOCATION_BUDGET } from "../src/constants";
 import { addAdmin, getAccount, getUserState, upsertAccount } from "../src/db";
 import { handleCallback } from "../src/handlers/callback";
 import { TgError } from "../src/telegram";
@@ -188,16 +188,52 @@ describe("broadcast", () => {
     expect(String(calls(app, "editMessageText").at(-1)!.text)).toContain("ارسال شد: ۳ از ۳");
   });
 
-  test("a batch never makes more than BATCH_SIZE Telegram calls", async () => {
-    await groups(BATCH_SIZE + 10);
+  test("a batch stays within the shared budget (Telegram calls + D1 statements)", async () => {
+    await groups(INVOCATION_BUDGET + 10);
     const app = makeApp();
     await startBroadcast(app);
-    const first = app.tg.calls.filter((c) => c.method === "copyMessage" || c.method === "deleteMessage");
-    expect(first.length).toBeLessThanOrEqual(BATCH_SIZE);
-    expect(calls(app, "copyMessage").length).toBe(BATCH_SIZE - 1);
+    const first = calls(app, "copyMessage").length;
+    // Fixed queries (work, drained, report) + outcome writes + the copies must fit in one budget.
+    expect(first).toBeGreaterThan(0);
+    expect(first).toBeLessThan(INVOCATION_BUDGET - 5);
+    for (let i = 0; i < 5; i++) await runBroadcastBatch(app);
+    expect(calls(app, "copyMessage")).toHaveLength(INVOCATION_BUDGET + 10);
+    expect(String(calls(app, "editMessageText").at(-1)!.text)).toContain("ارسال شد: ۵۵ از ۵۵");
+  });
+
+  test("a rate-limited final edit leaves the broadcast sending; the next run reports", async () => {
+    await groups(2);
+    const app = makeApp();
+    let editing = true;
+    app.tg.reply("editMessageText", (p) => {
+      if (editing && String(p.text).includes("ارسال شد")) throw new TgError(429, "Too Many Requests", { retry_after: 5 });
+      return true;
+    });
+    await startBroadcast(app);
+    const status = () => db.prepare("SELECT status FROM broadcasts").first<{ status: string }>();
+    expect((await status())!.status).toBe("sending");
+    editing = false;
     await runBroadcastBatch(app);
-    expect(calls(app, "copyMessage")).toHaveLength(BATCH_SIZE + 10);
-    expect(String(calls(app, "editMessageText").at(-1)!.text)).toContain(`ارسال شد: ۵۰ از ۵۰`);
+    expect((await status())!.status).toBe("done");
+    expect(JSON.stringify(calls(app, "editMessageText").at(-1)!.reply_markup)).toContain("bd:");
+  });
+
+  test("a permanently failing final edit still closes the broadcast", async () => {
+    await groups(1);
+    const app = makeApp();
+    app.tg.reply("editMessageText", (p) => {
+      if (String(p.text).includes("ارسال شد")) throw new TgError(400, "Bad Request: message to edit not found");
+      return true;
+    });
+    await startBroadcast(app);
+    expect((await db.prepare("SELECT status FROM broadcasts").first<{ status: string }>())!.status).toBe("done");
+  });
+
+  test("Budget refuses what it cannot cover", () => {
+    const b = new Budget(3);
+    expect(b.take(2)).toBe(true);
+    expect(b.take(2)).toBe(false);
+    expect(b.left).toBe(1);
   });
 
   test("delete-all queues and deletes sent rows", async () => {

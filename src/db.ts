@@ -771,23 +771,38 @@ export async function nextBroadcastWork(db: D1Database, limit: number): Promise<
   }));
 }
 
-/** Move one row out of `from` ('queued' or 'delete_queued'); false if it had already moved. */
-export async function setDelivery(
-  db: D1Database,
-  broadcastId: number,
-  chatId: number,
-  from: "queued" | "delete_queued",
-  to: "sent" | "failed" | "deleted" | "delete_failed",
-  f: { messageId?: number; error?: string } = {},
-): Promise<boolean> {
-  const res = await db
-    .prepare(
-      `UPDATE broadcast_messages SET state = ?, message_id = COALESCE(?, message_id), error = ?
-       WHERE broadcast_id = ? AND chat_id = ? AND state = ?`,
-    )
-    .bind(to, f.messageId ?? null, f.error ?? null, broadcastId, chatId, from)
-    .run();
-  return res.meta.changes === 1;
+export interface Delivery {
+  broadcastId: number;
+  chatId: number;
+  to: "sent" | "failed" | "deleted" | "delete_failed";
+  messageId?: number;
+  error?: string;
+}
+
+/** Rows per upsert statement: 5 bound parameters each stay under D1's cap of 100. */
+export const DELIVERIES_PER_STATEMENT = 15;
+
+/**
+ * Record outcomes of queued/delete_queued rows in as few statements as possible
+ * (ceil(n / DELIVERIES_PER_STATEMENT)). Rows that already left the queue are not touched.
+ */
+export async function recordDeliveries(db: D1Database, rows: Delivery[]): Promise<void> {
+  const statements: D1PreparedStatement[] = [];
+  for (let i = 0; i < rows.length; i += DELIVERIES_PER_STATEMENT) {
+    const chunk = rows.slice(i, i + DELIVERIES_PER_STATEMENT);
+    statements.push(
+      db
+        .prepare(
+          `INSERT INTO broadcast_messages (broadcast_id, chat_id, message_id, error, state)
+           VALUES ${chunk.map(() => "(?, ?, ?, ?, ?)").join(", ")}
+           ON CONFLICT (broadcast_id, chat_id) DO UPDATE SET state = excluded.state,
+             message_id = COALESCE(excluded.message_id, broadcast_messages.message_id), error = excluded.error
+           WHERE broadcast_messages.state IN ('queued', 'delete_queued')`,
+        )
+        .bind(...chunk.flatMap((d) => [d.broadcastId, d.chatId, d.messageId ?? null, d.error ?? null, d.to])),
+    );
+  }
+  if (statements.length) await db.batch(statements);
 }
 
 /** Broadcasts whose queue has drained: 'sending' with nothing queued, 'deleting' with nothing to delete. */

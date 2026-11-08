@@ -2,10 +2,11 @@ import { env } from "cloudflare:workers";
 import Decimal from "decimal.js";
 import { beforeEach, describe, expect, test } from "vitest";
 import { runCron } from "../src/cron";
-import { createEntry, getAccount, markUpdateSeen, transition, updateAccount, upsertAccount } from "../src/db";
+import { createBroadcast, createEntry, getAccount, markUpdateSeen, transition, updateAccount, upsertAccount } from "../src/db";
 import { runReminders } from "../src/reminders";
 import { TgError } from "../src/telegram";
 import type { Side } from "../src/trade";
+import { INVOCATION_BUDGET } from "../src/constants";
 import { makeApp } from "./fakes";
 
 const db = env.DB;
@@ -141,5 +142,38 @@ describe("runCron", () => {
     expect(sent(app)).toHaveLength(1);
     expect(await markUpdateSeen(db, 1, AT)).toBe(true); // was pruned
     expect(await markUpdateSeen(db, 2, AT)).toBe(false); // kept
+  });
+
+  test("reminders plus a broadcast share one budget per tick and finish over later ticks", async () => {
+    await db.batch([db.prepare("DELETE FROM broadcasts"), db.prepare("DELETE FROM broadcast_messages")]);
+    for (let i = 0; i < 60; i++) await debtor(-2000 - i);
+    await createBroadcast(db, {
+      fromChatId: 5, fromMessageId: 9, preview: "x", createdBy: "a", createdById: 1, createdAt: AT,
+      statusChatId: 5, statusMsgId: 1,
+    });
+
+    // Count D1 statements (every statement in a batch counts) next to the Telegram calls.
+    let d1 = 0;
+    const wrap = (raw: any): any => ({
+      raw,
+      bind: (...a: unknown[]) => wrap(raw.bind(...a)),
+      run: () => (d1++, raw.run()),
+      all: () => (d1++, raw.all()),
+      first: () => (d1++, raw.first()),
+    });
+    const counted = {
+      prepare: (q: string) => wrap(db.prepare(q)),
+      batch: (st: any[]) => ((d1 += st.length), db.batch(st.map((x) => x.raw))),
+    } as unknown as D1Database;
+    const app = makeApp({ db: counted });
+
+    for (let tick = 0; tick < 6; tick++) {
+      d1 = 0;
+      const before = app.tg.calls.length;
+      await runCron(app, NOON);
+      expect(app.tg.calls.length - before + d1).toBeLessThanOrEqual(INVOCATION_BUDGET);
+    }
+    expect(app.tg.calls.filter((c) => c.method === "sendMessage")).toHaveLength(60);
+    expect(app.tg.calls.filter((c) => c.method === "copyMessage")).toHaveLength(60);
   });
 });

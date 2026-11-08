@@ -1,11 +1,11 @@
 import type { CallbackQuery, Message, User } from "@grammyjs/types";
 import type { App } from "./app";
 import { escapeHtml, type Keyboard } from "./cards";
-import { BATCH_SIZE } from "./constants";
+import { Budget } from "./constants";
 import {
-  accountName, type Broadcast, broadcastReport, clearUserState, createBroadcast, drainedBroadcasts,
-  getUserState, isAdmin, listAccounts, listAdmins, migrateChat, nextBroadcastWork, setBroadcastStatus,
-  setDelivery, setUserState, startBroadcastDelete, takeUserState, updateAccount,
+  accountName, type Broadcast, DELIVERIES_PER_STATEMENT, type Delivery, broadcastReport, clearUserState, createBroadcast, drainedBroadcasts,
+  getUserState, isAdmin, listAccounts, listAdmins, migrateChat, nextBroadcastWork, recordDeliveries,
+  setBroadcastStatus, setUserState, startBroadcastDelete, takeUserState, updateAccount,
 } from "./db";
 import { fa } from "./money";
 import { isForbidden, isNotModified, TgError } from "./telegram";
@@ -232,16 +232,6 @@ export async function handleBroadcastCallback(app: App, q: CallbackQuery): Promi
 
 // --- batches --------------------------------------------------------------------
 
-/** Counts Telegram calls so one invocation stays within BATCH_SIZE subrequests. */
-class Budget {
-  left = BATCH_SIZE;
-  take(): boolean {
-    if (this.left <= 0) return false;
-    this.left--;
-    return true;
-  }
-}
-
 async function renderReport(app: App, b: Broadcast): Promise<{ text: string; sent: number }> {
   const r = await broadcastReport(app.db, b.id);
   const lines = [
@@ -260,26 +250,40 @@ async function renderReport(app: App, b: Broadcast): Promise<{ text: string; sen
   return { text: lines.join("\n"), sent: r.sent };
 }
 
-type Outcome = "ok" | "stop";
+/** Budget kept back for closing a broadcast: drained query, status report (2), edit, status flip. */
+const FINISH_RESERVE = 5;
+/** D1 statements to close one broadcast: report (2) + status flip. The edit is a Telegram call. */
+const FINISH_COST = 4;
 
-/** Copy to one group. A group that migrated is retried once at its new id. */
-async function copyOne(app: App, w: { broadcastId: number; chatId: number; fromChatId: number; fromMessageId: number }, budget: Budget): Promise<Outcome> {
+interface Work {
+  broadcastId: number;
+  chatId: number;
+  messageId: number | null;
+  state: "queued" | "delete_queued";
+  fromChatId: number;
+  fromMessageId: number;
+}
+
+/** Copy to one group. A group that migrated is retried once at its new id. Returns null when rate limited. */
+async function copyOne(app: App, w: Work, budget: Budget, spare: () => number): Promise<Delivery | null> {
   let chatId = w.chatId;
   let migrated = false;
   for (;;) {
-    if (!budget.take()) return "stop";
+    if (spare() < 1) return null;
+    budget.take();
     try {
       const res = await app.tg.call<{ message_id: number }>("copyMessage", {
         chat_id: chatId,
         from_chat_id: w.fromChatId,
         message_id: w.fromMessageId,
       });
-      await setDelivery(app.db, w.broadcastId, chatId, "queued", "sent", { messageId: res.message_id });
-      return "ok";
+      return { broadcastId: w.broadcastId, chatId, to: "sent", messageId: res.message_id };
     } catch (e) {
       if (!(e instanceof TgError)) throw e;
-      if (e.retryAfter !== undefined) return "stop";
+      if (e.retryAfter !== undefined) return null;
       if (e.migrateTo && !migrated) {
+        if (spare() < 5) return null; // migrateChat is a 5-statement batch
+        budget.take(5);
         await migrateChat(app.db, chatId, e.migrateTo);
         chatId = e.migrateTo;
         migrated = true;
@@ -288,60 +292,88 @@ async function copyOne(app: App, w: { broadcastId: number; chatId: number; fromC
       let error = e.message;
       if (isForbidden(e)) {
         error = FORBIDDEN_ERROR;
-        await updateAccount(app.db, chatId, { botStatus: "left", updatedAt: app.now() });
+        if (spare() >= 1) {
+          budget.take();
+          await updateAccount(app.db, chatId, { botStatus: "left", updatedAt: app.now() });
+        }
       }
-      await setDelivery(app.db, w.broadcastId, chatId, "queued", "failed", { error });
-      return "ok";
+      return { broadcastId: w.broadcastId, chatId, to: "failed", error };
     }
   }
 }
 
-async function deleteOne(app: App, w: { broadcastId: number; chatId: number; messageId: number | null }, budget: Budget): Promise<Outcome> {
-  if (w.messageId === null) {
-    await setDelivery(app.db, w.broadcastId, w.chatId, "delete_queued", "delete_failed", { error: "no message" });
-    return "ok";
-  }
-  if (!budget.take()) return "stop";
+async function deleteOne(app: App, w: Work, budget: Budget, spare: () => number): Promise<Delivery | null> {
+  const row = { broadcastId: w.broadcastId, chatId: w.chatId };
+  if (w.messageId === null) return { ...row, to: "delete_failed", error: "no message" };
+  if (spare() < 1) return null;
+  budget.take();
   try {
     await app.tg.call("deleteMessage", { chat_id: w.chatId, message_id: w.messageId });
-    await setDelivery(app.db, w.broadcastId, w.chatId, "delete_queued", "deleted");
+    return { ...row, to: "deleted" };
   } catch (e) {
     if (!(e instanceof TgError)) throw e;
-    if (e.retryAfter !== undefined) return "stop";
-    await setDelivery(app.db, w.broadcastId, w.chatId, "delete_queued", "delete_failed", { error: e.message });
+    if (e.retryAfter !== undefined) return null;
+    return { ...row, to: "delete_failed", error: e.message };
   }
-  return "ok";
 }
 
-/** Close broadcasts whose queue drained and update their status message (one call each). */
+/** A failed status edit worth retrying next tick (rate limit, server error); anything else will not get better. */
+const isTransient = (e: TgError): boolean => e.retryAfter !== undefined || e.code === 429 || e.code >= 500;
+
+/**
+ * Close broadcasts whose queue drained: edit the status message first, flip the status only once
+ * the edit landed (or can never land), so a failed edit is retried by the next tick.
+ */
 async function finishDrained(app: App, budget: Budget): Promise<void> {
+  if (!budget.take()) return;
   for (const b of await drainedBroadcasts(app.db)) {
-    if (budget.left <= 0) return;
+    if (!budget.take(FINISH_COST)) return;
     const to = b.status === "sending" ? "done" : "deleted";
-    if (!(await setBroadcastStatus(app.db, b.id, b.status, to))) continue;
-    if (b.statusChatId === null || b.statusMsgId === null) continue;
-    const { text, sent } = await renderReport(app, { ...b, status: to });
-    budget.take();
-    try {
-      await editMessage(app, b.statusChatId, b.statusMsgId, text, to === "done" && sent ? deleteKeyboard(b.id) : null);
-    } catch (e) {
-      if (!(e instanceof TgError)) throw e;
+    if (b.statusChatId !== null && b.statusMsgId !== null) {
+      const { text, sent } = await renderReport(app, { ...b, status: to });
+      try {
+        await editMessage(app, b.statusChatId, b.statusMsgId, text, to === "done" && sent ? deleteKeyboard(b.id) : null);
+      } catch (e) {
+        if (!(e instanceof TgError)) throw e;
+        if (isTransient(e)) {
+          if (e.retryAfter !== undefined) return;
+          continue;
+        }
+      }
     }
+    await setBroadcastStatus(app.db, b.id, b.status, to);
   }
 }
 
 /**
- * One cron/deferred step: copy or delete up to BATCH_SIZE messages (final status edits included),
- * oldest first. A Telegram rate limit ends the step; the rest stays queued for the next tick.
+ * One cron/deferred step, charged to `budget` (Telegram calls and D1 statements alike): copy or delete
+ * queued messages oldest first, record the outcomes in a few batched statements, then close drained
+ * broadcasts. A Telegram rate limit ends the step; the rest stays queued for the next tick.
  */
-export async function runBroadcastBatch(app: App): Promise<void> {
-  const budget = new Budget();
-  // Leave one call free so a finished broadcast always gets its status edit.
-  const work = await nextBroadcastWork(app.db, BATCH_SIZE - 1);
-  for (const w of work) {
-    if (budget.left <= 1) break;
-    const outcome = w.state === "queued" ? await copyOne(app, w, budget) : await deleteOne(app, w, budget);
-    if (outcome === "stop") break;
+export async function runBroadcastBatch(app: App, budget: Budget = new Budget()): Promise<void> {
+  // Rows fetched n: n Telegram calls + ceil(n / per-statement) outcome writes, within what is left
+  // after the work query and the closing reserve.
+  const avail = budget.left - 1 - FINISH_RESERVE;
+  let n = 0;
+  while (n + 1 + Math.ceil((n + 1) / DELIVERIES_PER_STATEMENT) <= avail) n++;
+  const results: Delivery[] = [];
+  if (n > 0 && budget.take()) {
+    const work = await nextBroadcastWork(app.db, n);
+    const writes = Math.ceil(work.length / DELIVERIES_PER_STATEMENT);
+    // Everything beyond the final writes and the closing reserve may be spent on Telegram calls and migrations.
+    const spare = () => budget.left - writes - FINISH_RESERVE;
+    try {
+      for (const w of work) {
+        const d = w.state === "queued" ? await copyOne(app, w, budget, spare) : await deleteOne(app, w, budget, spare);
+        if (!d) break;
+        results.push(d);
+      }
+    } finally {
+      if (results.length) {
+        budget.take(Math.ceil(results.length / DELIVERIES_PER_STATEMENT));
+        await recordDeliveries(app.db, results);
+      }
+    }
   }
   await finishDrained(app, budget);
 }
