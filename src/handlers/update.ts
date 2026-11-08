@@ -52,9 +52,11 @@ export async function handleUpdate(app: App, u: Update): Promise<void> {
 
     const mcm = u.my_chat_member;
     if (mcm) {
+      // Private chats (e.g. a user blocking the bot) and channels are not accounts.
+      if (mcm.chat.type !== "group" && mcm.chat.type !== "supergroup") return;
       await upsertAccount(app.db, {
         chatId: mcm.chat.id,
-        title: "title" in mcm.chat && mcm.chat.title ? mcm.chat.title : String(mcm.chat.id),
+        title: mcm.chat.title,
         type: mcm.chat.type,
         at: app.now(),
         botStatus: mcm.new_chat_member.status,

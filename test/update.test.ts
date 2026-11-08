@@ -120,6 +120,20 @@ describe("update routing", () => {
     expect((await getAccount(env.DB, group.id))?.botStatus).toBe("kicked");
   });
 
+  test("private-chat my_chat_member creates no account", async () => {
+    await handleUpdate(makeApp(), {
+      update_id: ++uid,
+      my_chat_member: {
+        chat: { id: 4242, type: "private", first_name: "U" },
+        from: user,
+        date: 0,
+        old_chat_member: {},
+        new_chat_member: { status: "kicked" },
+      },
+    } as unknown as Update);
+    expect(await getAccount(env.DB, 4242)).toBeNull();
+  });
+
   test("botInfo reads settings", async () => {
     expect(await botInfo(makeApp())).toEqual(BOT);
   });
