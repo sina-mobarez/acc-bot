@@ -1,12 +1,13 @@
 import { env } from "cloudflare:workers";
 import Decimal from "decimal.js";
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import {
   addAdmin, createEntry, getEntry, getSetting, listAccounts, type NewEntry, setCardMessage, setSetting, transition,
   upsertAccount,
 } from "../src/db";
 import { handleApi } from "../src/miniapp/api";
 import { validateInitData } from "../src/miniapp/auth";
+import { TgError } from "../src/telegram";
 import type { Trade } from "../src/trade";
 import { fakeFetch, makeApp, type TestApp } from "./fakes";
 
@@ -338,6 +339,22 @@ describe("admins and settings", () => {
     expect((await call(app, "PATCH", "/api/settings", { reminders_default: true })).json.reminders_default).toBe(true);
     expect(await getSetting(db, "reminders_default")).toBe("1");
     await db.prepare("DELETE FROM settings WHERE key = 'reminders_default'").run();
+  });
+
+  test("adding an admin sets their Mini App button, best-effort", async () => {
+    await setSetting(db, "public_url", "https://bot.example.dev");
+    const app = appFor();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    expect((await call(app, "POST", "/api/admins", { userId: 5151, name: "Mina" })).status).toBe(200);
+    expect(app.tg.calls.find((c) => c.method === "setChatMenuButton")!.params).toEqual({
+      chat_id: 5151,
+      menu_button: { type: "web_app", text: "پنل مدیریت", web_app: { url: "https://bot.example.dev/app/" } },
+    });
+    app.tg.fail("setChatMenuButton", 5252, new TgError(400, "Bad Request: chat not found"));
+    const res = await call(app, "POST", "/api/admins", { userId: 5252, name: "x" });
+    expect(res.status).toBe(200);
+    expect(res.json.admins).toContainEqual({ userId: 5252, name: "x", removable: true, source: "db" });
+    vi.restoreAllMocks();
   });
 
   test("deviation_pct is validated as a positive decimal (R20)", async () => {

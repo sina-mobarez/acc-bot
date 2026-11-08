@@ -2,9 +2,10 @@ import type { Update } from "@grammyjs/types";
 import type { App } from "./app";
 import { nowTehran } from "./app";
 import { runCron } from "./cron";
-import { parseAdminIds, setSetting } from "./db";
+import { listAdmins, parseAdminIds, setSetting } from "./db";
 import { handleUpdate } from "./handlers/update";
 import { handleApi } from "./miniapp/api";
+import { setAdminMenuButton } from "./miniapp/menu";
 import { createGeminiNlu } from "./nlu";
 import { fetchCoinUsdt, fetchUsdtToman } from "./prices";
 import { createTg } from "./telegram";
@@ -60,10 +61,12 @@ async function setup(app: App, origin: string): Promise<Record<string, unknown>>
     commands: commandList(PRIVATE_COMMANDS),
     scope: { type: "all_private_chats" },
   });
-  const menuButton = await app.tg.call("setChatMenuButton", {
-    menu_button: { type: "web_app", text: "پنل مدیریت", web_app: { url: `${origin}/app/` } },
-  });
-  return { me, webhook, groupCommands, privateCommands, menuButton };
+  // Default stays the commands menu, so clients never see «پنل مدیریت»; admins get it per chat (R24).
+  const menuButton = await app.tg.call("setChatMenuButton", { menu_button: { type: "commands" } });
+  const adminIds = new Set([...app.adminIds, ...(await listAdmins(app.db)).map((a) => a.userId)]);
+  const adminMenus: Record<string, boolean> = {};
+  for (const id of adminIds) adminMenus[String(id)] = await setAdminMenuButton(app, id, origin);
+  return { me, webhook, groupCommands, privateCommands, menuButton, adminMenus };
 }
 
 export default {

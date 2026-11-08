@@ -18,6 +18,7 @@ import { fetchUsdtToman, type UsdtPrice } from "../prices";
 import { TgError } from "../telegram";
 import { isPayment, type Side, type Trade } from "../trade";
 import { validateInitData } from "./auth";
+import { setAdminMenuButton } from "./menu";
 
 class ApiError extends Error {
   constructor(readonly status: number, message: string) {
@@ -369,6 +370,7 @@ async function adminAdd({ app, req, actor }: Ctx) {
   if (userId <= 0) throw bad("شناسه نامعتبر است.");
   const name = text(b.name ?? "", "نام", 100);
   await addAdmin(app.db, userId, name, actor.id, app.now());
+  await setAdminMenuButton(app, userId); // best-effort: a failure never fails the API call
   return adminsOf(app);
 }
 

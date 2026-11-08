@@ -3,7 +3,7 @@ import Decimal from "decimal.js";
 import type { Message, Update } from "@grammyjs/types";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import * as broadcast from "../src/broadcast";
-import { createEntry, getAccount, getEntry, getSetting, setSetting, setUserState } from "../src/db";
+import { addAdmin, createEntry, getAccount, getEntry, getSetting, setSetting, setUserState } from "../src/db";
 import * as commands from "../src/handlers/commands";
 import * as message from "../src/handlers/message";
 import { botInfo, handleUpdate, isAddressed } from "../src/handlers/update";
@@ -195,12 +195,21 @@ describe("worker routes", () => {
     expect(res.status).toBe(401);
   });
 
-  test("setup stores bot info and public_url", async () => {
+  test("setup stores bot info and public_url; the Mini App button is per admin chat", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    await addAdmin(env.DB, 31, "db admin", null, "2026-11-08T10:00:00+03:30");
+    await addAdmin(env.DB, 32, "unreachable", null, "2026-11-08T10:00:00+03:30");
     const calls: string[] = [];
+    const menus: Record<string, unknown>[] = [];
     const realFetch = globalThis.fetch;
-    globalThis.fetch = (async (input: RequestInfo | URL) => {
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input instanceof Request ? input.url : input);
       calls.push(url.split("/").pop()!);
+      if (url.endsWith("setChatMenuButton")) {
+        const body = JSON.parse(String(init?.body));
+        menus.push(body);
+        if (body.chat_id === 32) return new Response(JSON.stringify({ ok: false, error_code: 400, description: "chat not found" }));
+      }
       const result = url.endsWith("getMe") ? { id: 77, username: "setup_bot" } : true;
       return new Response(JSON.stringify({ ok: true, result }));
     }) as typeof fetch;
@@ -211,7 +220,10 @@ describe("worker routes", () => {
     } finally {
       globalThis.fetch = realFetch;
     }
-    expect(calls).toEqual(["getMe", "setWebhook", "setMyCommands", "setMyCommands", "setChatMenuButton"]);
+    expect(calls).toEqual(["getMe", "setWebhook", "setMyCommands", "setMyCommands", ...Array(4).fill("setChatMenuButton")]);
+    expect(menus[0]).toEqual({ menu_button: { type: "commands" } });
+    const app = { type: "web_app", text: "پنل مدیریت", web_app: { url: "https://bot.example.dev/app/" } };
+    expect(menus.slice(1)).toEqual([1, 31, 32].map((chat_id) => ({ chat_id, menu_button: app })));
     expect(await getSetting(env.DB, "bot_username")).toBe("setup_bot");
     expect(await getSetting(env.DB, "public_url")).toBe("https://bot.example.dev");
   });
