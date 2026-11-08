@@ -115,9 +115,9 @@ export function toAction(o: NluOutput, ctx: IntentCtx): Action {
       return { kind: "edit", dealCode: o.deal_code, changes };
     }
     case "query_balance":
-      return { kind: "balance", clientHint: o.client_hint };
+      return { kind: "balance", clientHint: ctx.role === "admin" ? o.client_hint : undefined };
     case "query_deals":
-      return { kind: "deals", clientHint: o.client_hint };
+      return { kind: "deals", clientHint: ctx.role === "admin" ? o.client_hint : undefined };
     case "query_price":
       return { kind: "price", coins: o.coins ?? [] };
     case "chitchat":

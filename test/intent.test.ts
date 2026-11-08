@@ -70,6 +70,17 @@ describe("toAction", () => {
     expect(toAction({ intent: "query_balance" }, { ...admin, role: "client" }).kind).toBe("balance");
   });
 
+  test.each([
+    ["query_balance", "balance"],
+    ["query_deals", "deals"],
+  ] as const)("%s: clientHint dropped for clients, kept for admins", (intent, kind) => {
+    const o: NluOutput = { intent, client_hint: "B" };
+    const c = toAction(o, { ...admin, role: "client" });
+    expect(c.kind).toBe(kind);
+    expect((c as { clientHint?: string }).clientHint).toBeUndefined();
+    expect(toAction(o, admin)).toEqual({ kind, clientHint: "B" });
+  });
+
   test("record_payment defaults to toman", () => {
     const a = toAction({ intent: "record_payment", direction: "RECEIVE", amount_text: "۱۰۰ میلیون" }, admin);
     if (a.kind !== "payment") throw new Error("expected payment");
