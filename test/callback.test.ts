@@ -3,8 +3,8 @@ import { env } from "cloudflare:workers";
 import Decimal from "decimal.js";
 import { describe, expect, test } from "vitest";
 import {
-  approvedLedger, createEntry, createPendingAction, type Entry, getEntry, getPendingAction, type NewEntry, setBatch,
-  setCardMessage, tradeToJson, transition,
+  approvedLedger, createEntry, createPendingAction, type EditChanges, editPayload, type Entry, getEntry, getPendingAction,
+  type NewEntry, setBatch, setCardMessage, transition,
 } from "../src/db";
 import { handleCallback, notifyChange } from "../src/handlers/callback";
 import { allocate } from "../src/ledger";
@@ -230,17 +230,46 @@ describe("cancel", () => {
 });
 
 describe("edit proposals", () => {
-  const proposal = (e: Entry, next: Trade) =>
+  const proposal = (e: Entry, changes: EditChanges) =>
     createPendingAction(db, {
-      chatId: e.chatId, kind: "edit", entryId: e.id, payload: JSON.parse(tradeToJson(next)), createdBy: 1, createdAt: AT,
+      chatId: e.chatId, kind: "edit", entryId: e.id, payload: editPayload(changes), createdBy: 1, createdAt: AT,
     });
+
+  test("two proposals from the same original both survive (applied A then B)", async () => {
+    const chat = freshChat();
+    const e = await mk(chat, deal());
+    const a = await proposal(e, { rate: D(270000) });
+    const b = await proposal(e, { amount: D(300) });
+    const app = makeApp();
+    await handleCallback(app, cb(chat, `ea:${a}`, 1, 60));
+    await handleCallback(app, cb(chat, `ea:${b}`, 1, 61));
+    const t = (await getEntry(db, e.id))!.trade;
+    expect(t.amount.toString()).toBe("300");
+    expect(t.rate!.toString()).toBe("270000");
+    // The result message shows the real before/after of each apply.
+    const second = String(calls(app, "editMessageText").find((x) => x.message_id === 61)!.text);
+    expect(second).toContain("قبل");
+    expect(second).toContain("۱۰۰ ");
+    expect(second).toContain("۲۷۰٬۰۰۰");
+    expect(second).toContain("۳۰۰ ");
+  });
+
+  test("a rate change on a toman deal is recomputed against the current trade", async () => {
+    const chat = freshChat();
+    const e = await mk(chat, deal({ amount: D(2000), rate: D(250000), tomanTotal: D(500_000_000) }));
+    const id = await proposal(e, { rate: D(200000) });
+    await handleCallback(makeApp(), cb(chat, `ea:${id}`));
+    const t = (await getEntry(db, e.id))!.trade;
+    expect(t.amount.toString()).toBe("2500");
+    expect(t.tomanTotal!.toString()).toBe("500000000");
+  });
 
   test("apply edit changes entry and records event", async () => {
     const chat = freshChat();
     const e = await mk(chat, deal());
     await approve(e);
     await setCardMessage(db, e.id, 77);
-    const id = await proposal(e, deal({ amount: D(250) }));
+    const id = await proposal(e, { amount: D(250) });
     const app = makeApp();
     await handleCallback(app, cb(chat, `ea:${id}`, 1, 60));
     expect((await getEntry(db, e.id))!.trade.amount.toString()).toBe("250");
@@ -254,7 +283,7 @@ describe("edit proposals", () => {
   test("apply edit twice is a no-op", async () => {
     const chat = freshChat();
     const e = await mk(chat, deal());
-    const id = await proposal(e, deal({ amount: D(250) }));
+    const id = await proposal(e, { amount: D(250) });
     const app = makeApp();
     await handleCallback(app, cb(chat, `ea:${id}`));
     const edits = calls(app, "editMessageText").length;
@@ -269,7 +298,7 @@ describe("edit proposals", () => {
     const chat = freshChat();
     const e = await mk(chat, deal());
     await transition(db, [e.id], "pending", "cancelled");
-    const id = await proposal(e, deal({ amount: D(250) }));
+    const id = await proposal(e, { amount: D(250) });
     await handleCallback(makeApp(), cb(chat, `ea:${id}`));
     expect((await getEntry(db, e.id))!.trade.amount.toString()).toBe("100");
     expect((await getPendingAction(db, id))!.status).toBe("discarded");
@@ -278,7 +307,7 @@ describe("edit proposals", () => {
   test("apply edit from another chat is refused and the action stays pending", async () => {
     const chat = freshChat();
     const e = await mk(chat, deal());
-    const id = await proposal(e, deal({ amount: D(250) }));
+    const id = await proposal(e, { amount: D(250) });
     const app = makeApp();
     await handleCallback(app, cb(freshChat(), `ea:${id}`));
     expect((await getEntry(db, e.id))!.trade.amount.toString()).toBe("100");
@@ -291,7 +320,7 @@ describe("edit proposals", () => {
   test("discard edit leaves the entry alone", async () => {
     const chat = freshChat();
     const e = await mk(chat, deal());
-    const id = await proposal(e, deal({ amount: D(250) }));
+    const id = await proposal(e, { amount: D(250) });
     const app = makeApp();
     await handleCallback(app, cb(chat, `ed:${id}`));
     await handleCallback(app, cb(chat, `ea:${id}`));

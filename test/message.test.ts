@@ -408,7 +408,7 @@ describe("deal actions", () => {
     expect(row!.kind).toBe("edit");
     expect(row!.status).toBe("pending");
     const payload = JSON.parse(String(row!.payload_json));
-    expect(payload).toMatchObject({ side: "BUY", amount: "100", asset: "USDT", rate: "270000", tomanTotal: null });
+    expect(payload).toEqual({ rate: "270000" }); // only the requested change, re-applied at approval time
     expect(lastButtons(a)).toEqual([`ea:${row!.id}`, `ed:${row!.id}`]);
     const after = (await getEntry(db, deal.id))!;
     expect(after.trade.rate!.eq(266000)).toBe(true);
@@ -425,7 +425,7 @@ describe("deal actions", () => {
     expect(JSON.parse(row!.payload_json).rate).toBe("270");
   });
 
-  test("edit of a toman deal's rate recomputes the amount", async () => {
+  test("edit of a toman deal's rate previews the recomputed amount", async () => {
     const chat = freshGroup();
     const deal = await approved(
       chat.id,
@@ -435,7 +435,8 @@ describe("deal actions", () => {
     const m = msg(chat, ADMIN, "قیمت ۲۵۰ هزار");
     await handleMessage(a, m, m.text!);
     const row = await db.prepare("SELECT payload_json FROM pending_actions WHERE entry_id = ?").bind(deal.id).first<{ payload_json: string }>();
-    expect(JSON.parse(row!.payload_json)).toMatchObject({ amount: "2000", rate: "250000", tomanTotal: "500000000" });
+    expect(JSON.parse(row!.payload_json)).toEqual({ rate: "250000" });
+    expect(String(a.tg.calls.at(-1)!.params.text)).toContain("۲٬۰۰۰ ");
   });
 
   test("edit of a cancelled deal is refused", async () => {

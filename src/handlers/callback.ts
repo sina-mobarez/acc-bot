@@ -3,15 +3,16 @@ import Decimal from "decimal.js";
 import type { App } from "../app";
 import { handleBroadcastCallback } from "../broadcast";
 import {
-  debtLine, entryKeyboard, type Keyboard, renderEntry, renderSettlement, settlementKeyboard,
+  debtLine, entryKeyboard, type Keyboard, renderEditApplied, renderEntry, renderSettlement, settlementKeyboard,
 } from "../cards";
 import {
-  approvedLedger, cancelEntry, editEntry, type Entry, entriesInBatch, getEntry, getPendingAction, isAdmin,
+  approvedLedger, cancelEntry, editChangesFromPayload, editEntry, type Entry, entriesInBatch, getEntry, getPendingAction, isAdmin,
   type PendingAction, releasePendingAction, takePendingAction, transition, unlinkPayments,
 } from "../db";
 import { allocate, debts, summarize } from "../ledger";
+import { applyTradeEdit } from "../parser";
 import { isNotModified, TgError } from "../telegram";
-import { isPayment, type Side, type Trade } from "../trade";
+import { isPayment } from "../trade";
 
 const NOT_ALLOWED = "شما اجازه این کار را ندارید.";
 const ALREADY = "این مورد قبلاً بررسی شده است.";
@@ -171,18 +172,6 @@ async function cancelConfirm(c: Ctx, entry: Entry): Promise<void> {
   await answer(app, c.q);
 }
 
-function tradeFromPayload(p: any): Trade {
-  const dec = (v: unknown) => (v === null || v === undefined ? null : new Decimal(String(v)));
-  return {
-    side: p.side as Side,
-    amount: new Decimal(String(p.amount)),
-    asset: String(p.asset),
-    rate: dec(p.rate),
-    note: String(p.note ?? ""),
-    tomanTotal: dec(p.tomanTotal),
-  };
-}
-
 /** The still-pending edit action for this chat, or null (after answering the callback). */
 async function ownedAction(c: Ctx, actionId: number): Promise<PendingAction | null> {
   const a = await getPendingAction(c.app.db, actionId);
@@ -210,14 +199,16 @@ async function applyEdit(c: Ctx, actionId: number): Promise<void> {
   }
   const action = await takePendingAction(app.db, actionId, "applied");
   if (!action) return answer(app, c.q, ALREADY, true);
+  // Re-apply only the requested changes to the trade as it is now, so edits made since are kept.
+  const next = applyTradeEdit(entry.trade, editChangesFromPayload(action.payload));
   let updated: Entry;
   try {
-    updated = await editEntry(app.db, entry.id, tradeFromPayload(action.payload), c.actor, app.now());
+    updated = await editEntry(app.db, entry.id, next, c.actor, app.now());
   } catch (e) {
     await releasePendingAction(app.db, actionId);
     throw e;
   }
-  await editText(app, c.chatId, c.msgId, `✅ <b>ویرایش اعمال شد</b>\n\n${renderEntry(updated)}`, null);
+  await editText(app, c.chatId, c.msgId, renderEditApplied(updated, entry.trade), null);
   // The original card would otherwise keep showing the old numbers (batch cards are settlements: left alone).
   if (updated.cardMsgId && !updated.batchId) {
     try {

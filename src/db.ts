@@ -615,6 +615,32 @@ export async function clearUserState(db: D1Database, userId: number): Promise<vo
   await db.prepare("DELETE FROM user_state WHERE user_id = ?").bind(userId).run();
 }
 
+/** The changes an edit proposal asks for. Stored instead of a full trade so an older proposal never reverts newer edits. */
+export interface EditChanges {
+  amount?: Decimal;
+  rate?: Decimal;
+  note?: string;
+}
+
+export const editPayload = (ch: EditChanges): Record<string, string> => {
+  const out: Record<string, string> = {};
+  if (ch.amount !== undefined) out.amount = ch.amount.toFixed();
+  if (ch.rate !== undefined) out.rate = ch.rate.toFixed();
+  if (ch.note !== undefined) out.note = ch.note;
+  return out;
+};
+
+export function editChangesFromPayload(p: unknown): EditChanges {
+  const ch: EditChanges = {};
+  if (typeof p !== "object" || p === null) return ch;
+  const o = p as Record<string, unknown>;
+  const has = (k: string) => Object.hasOwn(o, k) && o[k] !== null && o[k] !== undefined;
+  if (has("amount")) ch.amount = new Decimal(String(o.amount));
+  if (has("rate")) ch.rate = new Decimal(String(o.rate));
+  if (has("note")) ch.note = String(o.note);
+  return ch;
+}
+
 export interface PendingAction {
   id: number;
   chatId: number;

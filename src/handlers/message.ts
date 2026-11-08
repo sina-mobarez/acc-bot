@@ -7,9 +7,9 @@ import {
   renderEntry, renderList, renderPrices, renderSettlement, settlementKeyboard,
 } from "../cards";
 import {
-  type Account, accountName, approvedLedger, createEntry, createPendingAction, type Entry,
-  findByCardMessage, getAccount, getByCode, getSetting, isAdmin, listAccounts, recent, setBatch,
-  setCardMessage, tradeToJson,
+  type Account, accountName, approvedLedger, createEntry, createPendingAction, type EditChanges, editPayload,
+  type Entry, findByCardMessage, getAccount, getByCode, getSetting, isAdmin, listAccounts, recent, setBatch,
+  setCardMessage,
 } from "../db";
 import {
   type Action, DEFAULT_DEVIATION_PCT, deviationPct, expandRateShorthand, parseDeviationSetting, toAction,
@@ -337,13 +337,18 @@ async function edit(
     rate = expandRateShorthand(raw ?? rate, cur.asset, c.usdt?.latest ?? null);
   }
 
-  const next = applyTradeEdit(cur, { amount: ch.amount, rate, note: ch.note });
+  const changes: EditChanges = {};
+  if (ch.amount !== undefined) changes.amount = ch.amount;
+  if (rate !== undefined) changes.rate = rate;
+  if (ch.note !== undefined) changes.note = ch.note;
+  // The preview is against today's trade; approval re-applies the same changes to the trade as it is then.
+  const next = applyTradeEdit(cur, changes);
 
   const id = await createPendingAction(app.db, {
     chatId: c.chatId,
     kind: "edit",
     entryId: deal.id,
-    payload: JSON.parse(tradeToJson(next)),
+    payload: editPayload(changes),
     createdBy: msg.from?.id ?? 0,
     createdAt: app.now(),
   });

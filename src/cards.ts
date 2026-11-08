@@ -195,6 +195,22 @@ export function renderEditProposal(e: Entry, next: Trade, _actionId: number | st
   ].join("\n");
 }
 
+/** The outcome of an applied edit: the real before/after, then the updated card. */
+export function renderEditApplied(updated: Entry, before: Trade): string {
+  return [
+    `✅ <b>ویرایش اعمال شد</b> <code>${updated.code}</code>`,
+    LINE,
+    `<b>قبل:</b>`,
+    describeTrade(before),
+    "",
+    `<b>بعد:</b>`,
+    describeTrade(updated.trade),
+    LINE,
+    "",
+    renderEntry(updated),
+  ].join("\n");
+}
+
 export function editKeyboard(actionId: number | string): Keyboard {
   return { inline_keyboard: [[btn("✅ اعمال", `ea:${actionId}`), btn("🗑 انصراف", `ed:${actionId}`)]] };
 }
