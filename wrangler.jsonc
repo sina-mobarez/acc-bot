@@ -7,7 +7,7 @@
       "binding": "DB",
       "database_name": "acc-bot",
       // PLACEHOLDER: replace with the id printed by `wrangler d1 create acc-bot`
-      "database_id": "REPLACE_WITH_D1_DATABASE_ID",
+      "database_id": "2b6e5011-4b76-4c5a-8712-270f1d96a144",
       "migrations_dir": "migrations"
     }
   ],
