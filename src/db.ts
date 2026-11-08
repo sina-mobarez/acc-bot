@@ -650,6 +650,16 @@ export async function createPendingAction(
   return Number(res.meta.last_row_id);
 }
 
+export async function getPendingAction(db: D1Database, id: number): Promise<PendingAction | null> {
+  const r = await db.prepare("SELECT * FROM pending_actions WHERE id = ?").bind(id).first<Row>();
+  return r ? pendingFromRow(r) : null;
+}
+
+/** Undo a claim whose follow-up work failed, so the button can be pressed again. */
+export async function releasePendingAction(db: D1Database, id: number): Promise<void> {
+  await db.prepare("UPDATE pending_actions SET status = 'pending' WHERE id = ? AND status = 'applied'").bind(id).run();
+}
+
 /** Atomically claim a pending action (compare-and-set on status); null if already taken. */
 export async function takePendingAction(
   db: D1Database,

@@ -3,7 +3,7 @@ import { env } from "cloudflare:workers";
 import Decimal from "decimal.js";
 import { describe, expect, test } from "vitest";
 import {
-  approvedLedger, createEntry, createPendingAction, type Entry, getEntry, type NewEntry, setBatch,
+  approvedLedger, createEntry, createPendingAction, type Entry, getEntry, getPendingAction, type NewEntry, setBatch,
   setCardMessage, tradeToJson, transition,
 } from "../src/db";
 import { handleCallback, notifyChange } from "../src/handlers/callback";
@@ -153,6 +153,34 @@ describe("settlement batch", () => {
   });
 });
 
+describe("settlement batch sums", () => {
+  test("a batch of 60 + 60 against 100 remaining is refused and rejected", async () => {
+    const chat = freshChat();
+    const d = await mk(chat, deal({ rate: null }));
+    await approve(d);
+    const p1 = await mk(chat, pay({ amount: D(60) }), { linkedDealId: d.id });
+    const p2 = await mk(chat, pay({ amount: D(60) }), { linkedDealId: d.id });
+    await setBatch(db, [p1.id, p2.id], String(p1.id));
+    const app = makeApp();
+    await handleCallback(app, cb(chat, `ok:${p1.id}`));
+    expect((await getEntry(db, p1.id))!.status).toBe("rejected");
+    expect((await getEntry(db, p2.id))!.status).toBe("rejected");
+    expect((await approvedLedger(db, chat)).length).toBe(1);
+  });
+
+  test("an unlinked member does not disable the check for linked ones", async () => {
+    const chat = freshChat();
+    const d = await mk(chat, deal({ rate: null }));
+    await approve(d);
+    const linked = await mk(chat, pay({ amount: D(150) }), { linkedDealId: d.id });
+    const loose = await mk(chat, pay({ amount: D(1) }));
+    await setBatch(db, [linked.id, loose.id], String(linked.id));
+    await handleCallback(makeApp(), cb(chat, `ok:${linked.id}`));
+    expect((await getEntry(db, linked.id))!.status).toBe("rejected");
+    expect((await getEntry(db, loose.id))!.status).toBe("rejected");
+  });
+});
+
 describe("cancel", () => {
   test("cancel pending cancels directly", async () => {
     const chat = freshChat();
@@ -244,6 +272,20 @@ describe("edit proposals", () => {
     const id = await proposal(e, deal({ amount: D(250) }));
     await handleCallback(makeApp(), cb(chat, `ea:${id}`));
     expect((await getEntry(db, e.id))!.trade.amount.toString()).toBe("100");
+    expect((await getPendingAction(db, id))!.status).toBe("discarded");
+  });
+
+  test("apply edit from another chat is refused and the action stays pending", async () => {
+    const chat = freshChat();
+    const e = await mk(chat, deal());
+    const id = await proposal(e, deal({ amount: D(250) }));
+    const app = makeApp();
+    await handleCallback(app, cb(freshChat(), `ea:${id}`));
+    expect((await getEntry(db, e.id))!.trade.amount.toString()).toBe("100");
+    expect((await getPendingAction(db, id))!.status).toBe("pending");
+    expect(lastAnswer(app)).toMatchObject({ show_alert: true });
+    await handleCallback(app, cb(freshChat(), `ed:${id}`));
+    expect((await getPendingAction(db, id))!.status).toBe("pending");
   });
 
   test("discard edit leaves the entry alone", async () => {

@@ -5,8 +5,8 @@ import {
   debtLine, entryKeyboard, type Keyboard, renderEntry, renderSettlement, settlementKeyboard,
 } from "../cards";
 import {
-  approvedLedger, cancelEntry, editEntry, type Entry, entriesInBatch, getEntry, isAdmin, takePendingAction,
-  transition, unlinkPayments,
+  approvedLedger, cancelEntry, editEntry, type Entry, entriesInBatch, getEntry, getPendingAction, isAdmin,
+  type PendingAction, releasePendingAction, takePendingAction, transition, unlinkPayments,
 } from "../db";
 import { allocate, debts, summarize } from "../ledger";
 import { isNotModified, TgError } from "../telegram";
@@ -74,12 +74,21 @@ async function showCard(c: Ctx, entry: Entry, extra = "", confirmCancel = false)
 
 /** R18: every payment of a settlement batch must still fit in its deal's matching leg. */
 async function settlementStillValid(app: App, chatId: number, batch: Entry[]): Promise<boolean> {
-  if (!batch.every((e) => isPayment(e.trade) && e.linkedDealId !== null)) return true;
-  const legsByDeal = allocate(await approvedLedger(app.db, chatId));
-  return batch.every((p) => {
+  // Sum the batch per (deal, asset, direction): several payments may hit the same leg.
+  const needed = new Map<string, { dealId: number; asset: string; dir: string; sum: Decimal }>();
+  for (const p of batch) {
+    if (!isPayment(p.trade) || p.linkedDealId === null) continue;
     const dir = p.trade.side === "RECEIVE" ? "client_owes" : "we_owe";
-    const leg = legsByDeal.get(p.linkedDealId!)?.find((l) => l.asset === p.trade.asset && l.dir === dir);
-    return !!leg && leg.remaining.gte(p.trade.amount);
+    const key = `${p.linkedDealId}|${p.trade.asset}|${dir}`;
+    const cur = needed.get(key);
+    if (cur) cur.sum = cur.sum.plus(p.trade.amount);
+    else needed.set(key, { dealId: p.linkedDealId, asset: p.trade.asset, dir, sum: p.trade.amount });
+  }
+  if (!needed.size) return true;
+  const legsByDeal = allocate(await approvedLedger(app.db, chatId));
+  return [...needed.values()].every((n) => {
+    const leg = legsByDeal.get(n.dealId)?.find((l) => l.asset === n.asset && l.dir === n.dir);
+    return !!leg && leg.remaining.gte(n.sum);
   });
 }
 
@@ -147,16 +156,40 @@ function tradeFromPayload(p: any): Trade {
   };
 }
 
+/** The still-pending edit action for this chat, or null (after answering the callback). */
+async function ownedAction(c: Ctx, actionId: number): Promise<PendingAction | null> {
+  const a = await getPendingAction(c.app.db, actionId);
+  if (!a || a.kind !== "edit" || a.chatId !== c.chatId) {
+    await answer(c.app, c.q, NOT_FOUND, true);
+    return null;
+  }
+  if (a.status !== "pending") {
+    await answer(c.app, c.q, ALREADY, true);
+    return null;
+  }
+  return a;
+}
+
 async function applyEdit(c: Ctx, actionId: number): Promise<void> {
   const { app } = c;
-  const action = await takePendingAction(app.db, actionId, "applied");
-  if (!action) return answer(app, c.q, ALREADY, true);
-  const entry = await getEntry(app.db, action.entryId);
+  const peek = await ownedAction(c, actionId);
+  if (!peek) return;
+  const entry = await getEntry(app.db, peek.entryId);
   if (!entry || (entry.status !== "pending" && entry.status !== "approved")) {
+    // Nothing can ever be applied to it: discard the proposal and say why.
+    await takePendingAction(app.db, actionId, "discarded");
     await editText(app, c.chatId, c.msgId, `⚠️ ${NOT_EDITABLE}`, null);
     return answer(app, c.q, NOT_EDITABLE, true);
   }
-  const updated = await editEntry(app.db, entry.id, tradeFromPayload(action.payload), c.actor, app.now());
+  const action = await takePendingAction(app.db, actionId, "applied");
+  if (!action) return answer(app, c.q, ALREADY, true);
+  let updated: Entry;
+  try {
+    updated = await editEntry(app.db, entry.id, tradeFromPayload(action.payload), c.actor, app.now());
+  } catch (e) {
+    await releasePendingAction(app.db, actionId);
+    throw e;
+  }
   await editText(app, c.chatId, c.msgId, `✅ <b>ویرایش اعمال شد</b>\n\n${renderEntry(updated)}`, null);
   // The original card would otherwise keep showing the old numbers (batch cards are settlements: left alone).
   if (updated.cardMsgId && !updated.batchId) {
@@ -171,6 +204,7 @@ async function applyEdit(c: Ctx, actionId: number): Promise<void> {
 
 async function discardEdit(c: Ctx, actionId: number): Promise<void> {
   const { app } = c;
+  if (!(await ownedAction(c, actionId))) return;
   if (!(await takePendingAction(app.db, actionId, "discarded"))) return answer(app, c.q, ALREADY, true);
   await editText(app, c.chatId, c.msgId, "🗑 ویرایش انصراف داده شد.", null);
   await answer(app, c.q);
