@@ -118,7 +118,7 @@ export function parsePayment(text: string): Trade | null {
   return {
     side: PAYMENT_SIDES[g.side.toLowerCase()],
     amount,
-    asset: ASSETS[asset.toLowerCase()] ?? asset.toUpperCase(),
+    asset: assetCode(asset.toLowerCase()),
     rate: null,
     note: (g.note ?? "").trim(),
     tomanTotal: null,

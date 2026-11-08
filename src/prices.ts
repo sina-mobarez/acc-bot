@@ -1,4 +1,5 @@
 import Decimal from "decimal.js";
+import "./money"; // configures Decimal precision
 
 export type UsdtPrice = { latest: Decimal; bestBuy: Decimal; bestSell: Decimal };
 export type CoinQuote = { coin: string; usdt: Decimal | null; toman: Decimal | null };

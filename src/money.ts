@@ -1,5 +1,8 @@
 import Decimal from "decimal.js";
 
+// v1 used 28 digits; 40 keeps every product/quotient exact enough. Configured once for all modules.
+Decimal.set({ precision: 40, rounding: Decimal.ROUND_HALF_UP });
+
 // Persian/Arabic digits and separators -> ASCII; Arabic yeh/kaf -> Persian.
 const FROM = "۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩٬٫يك";
 const TO = "01234567890123456789,.یک";
@@ -34,11 +37,11 @@ export const TOMAN = "IRT";
 export const PRECISION: Record<string, number> = { USDT: 2, USD: 2, EUR: 2, AED: 2, TRY: 2 };
 
 export function assetCode(word: string): string {
-  return ASSETS[word] ?? word.toUpperCase();
+  return Object.hasOwn(ASSETS, word) ? ASSETS[word] : word.toUpperCase();
 }
 
 export function assetName(code: string): string {
-  return ASSET_NAMES[code] ?? code;
+  return Object.hasOwn(ASSET_NAMES, code) ? ASSET_NAMES[code] : code;
 }
 
 // JS \b doesn't work for Persian letters; this is a Unicode-aware word end.
