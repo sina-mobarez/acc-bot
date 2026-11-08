@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { clampNluOutput, createGeminiNlu, SYSTEM_PROMPT, type NluInput } from "../src/nlu";
+import { clampNluOutput, createGeminiNlu, RESPONSE_SCHEMA, SYSTEM_PROMPT, type NluInput } from "../src/nlu";
 import { fakeFetch } from "./fakes";
 
 const input: NluInput = { text: "۱۰۰ تتر خریدم", role: "admin", chat: "group", openDeals: [] };
@@ -71,6 +71,11 @@ describe("gemini nlu", () => {
     expect(clampNluOutput({ intent: "chitchat", reply: "کوتاه" })).toEqual({ intent: "chitchat", reply: "کوتاه" });
   });
 
+  test("query_remaining is in the schema enum and the prompt", () => {
+    expect(RESPONSE_SCHEMA.properties.intent.enum).toContain("query_remaining");
+    expect(SYSTEM_PROMPT).toContain("query_remaining");
+  });
+
   test("system prompt keeps the money-facts, hard-line and verbatim-number rules", () => {
     expect(SYSTEM_PROMPT).toContain("never state balances, amounts, debts or prices in reply or joke");
     expect(SYSTEM_PROMPT).toContain("query_balance, query_deals or query_price");
@@ -98,7 +103,6 @@ describe("gemini nlu", () => {
 
 describe("response schema", () => {
   test("every field is required (nullable) so the lite model can't skip the amount", async () => {
-    const { RESPONSE_SCHEMA } = await import("../src/nlu");
     const props = Object.keys(RESPONSE_SCHEMA.properties);
     expect([...RESPONSE_SCHEMA.required].sort()).toEqual([...props].sort());
     for (const k of props.filter((k) => k !== "intent")) {

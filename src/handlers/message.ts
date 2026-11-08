@@ -3,7 +3,7 @@ import Decimal from "decimal.js";
 import type { Message, User } from "@grammyjs/types";
 import type { App } from "../app";
 import {
-  entryKeyboard, escapeHtml, editKeyboard, type Keyboard, renderBalance, renderEditProposal,
+  entryKeyboard, escapeHtml, editKeyboard, type Keyboard, renderAccountRemaining, renderBalance, renderDealRemaining, renderEditProposal,
   renderEntry, renderList, renderPrices, renderSettlement, settlementKeyboard,
 } from "../cards";
 import {
@@ -250,6 +250,8 @@ async function dispatch(c: Ctx, action: Action, joke: string | undefined, out: N
       }
       return;
     }
+    case "remaining":
+      return remaining(c, action, joke);
     case "balance":
     case "deals": {
       const target = await resolveAccount(c, action.clientHint);
@@ -310,6 +312,31 @@ async function resolveAccount(c: Ctx, hint: string | undefined): Promise<{ chatI
   const names = matches.slice(0, MAX_LISTED).map((a) => `• ${escapeHtml(accountName(a))}`);
   if (matches.length > MAX_LISTED) names.push("…");
   return ["کدام مشتری؟ دقیق‌تر بگو:", ...names].join("\n");
+}
+
+/** «How much is left»: one deal's open legs (code or replied-to card), else the account in short sentences. */
+async function remaining(c: Ctx, action: Extract<Action, { kind: "remaining" }>, joke: string | undefined): Promise<void> {
+  const { app } = c;
+  const replied = c.msg.reply_to_message;
+  let deal: Entry | null = null;
+  if (action.dealCode) deal = await getByCode(app.db, c.chatId, action.dealCode);
+  else if (replied) deal = await findByCardMessage(app.db, c.chatId, replied.message_id);
+  if (!deal && action.dealCode) return void (await send(c, withJoke("این معامله پیدا نشد.", joke)));
+
+  if (deal) {
+    const code = `<code>${escapeHtml(deal.code)}</code>`;
+    let body: string;
+    if (isPayment(deal.trade)) body = `${code} یک پرداخته، نه معامله.`;
+    else if (deal.status === "pending") body = `${code} هنوز تایید نشده.`;
+    else if (deal.status !== "approved") body = `${code} ${deal.status === "rejected" ? "رد" : "لغو"} شده.`;
+    else body = renderDealRemaining(deal.code, allocate(await approvedLedger(app.db, c.chatId)).get(deal.id) ?? []);
+    return void (await send(c, withJoke(body, joke)));
+  }
+
+  const target = await resolveAccount(c, action.clientHint);
+  if (typeof target === "string") return void (await send(c, withJoke(target, joke)));
+  const ledger = await approvedLedger(app.db, target.chatId);
+  await send(c, withJoke(renderAccountRemaining(summarize(ledger.map((l) => l.trade))), joke));
 }
 
 async function settle(c: Ctx, code: string): Promise<void> {

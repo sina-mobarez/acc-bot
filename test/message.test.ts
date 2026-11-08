@@ -8,6 +8,7 @@ import {
   createEntry,
   getEntry,
   recent,
+  setCardMessage,
   setSetting,
   transition,
   upsertAccount,
@@ -431,6 +432,126 @@ describe("price coin cap", () => {
     expect(kucoinCalls).toBe(10);
     expect(lastText(a)).toContain("C9");
     expect(lastText(a)).not.toContain("C10");
+  });
+});
+
+describe("query_remaining", () => {
+  const BOT_CARD = (chat: Message["chat"], e: Entry) => ({ message_id: e.cardMsgId!, date: 0, chat, from: BOT, text: "card" });
+  async function withCard(chatId: number, t: Trade): Promise<Entry> {
+    const e = await approved(chatId, t);
+    await setCardMessage(db, e.id, ++nextMsg + 9000);
+    return (await getEntry(db, e.id))!;
+  }
+
+  test("reply to partly paid SELL card: one-line answer, no balance card", async () => {
+    const chat = freshGroup();
+    const deal = await withCard(chat.id, trade());
+    await approved(chat.id, trade({ side: "RECEIVE", asset: "IRT", amount: D(66_000_000), rate: null }), deal.id);
+    const a = app(nlu({ intent: "query_remaining" }));
+    const m = msg(chat, CLIENT, "چقد دیگه مونده؟", { reply_to_message: BOT_CARD(chat, deal) });
+    await handleMessage(a, m, m.text!);
+    const t = lastText(a);
+    expect(t).toContain("۲۰۰٬۰۰۰٬۰۰۰ تومان");
+    expect(t).toContain("۱٬۰۰۰ تتر");
+    expect(t).toContain(deal.code);
+    expect(t).not.toContain("مانده حساب");
+  });
+
+  test("fully settled deal says settled", async () => {
+    const chat = freshGroup();
+    const deal = await approved(chat.id, trade());
+    await approved(chat.id, trade({ side: "RECEIVE", asset: "IRT", amount: D(266_000_000), rate: null }), deal.id);
+    await approved(chat.id, trade({ side: "PAY", amount: D(1000), rate: null }), deal.id);
+    const a = app(nlu({ intent: "query_remaining", deal_code: deal.code }));
+    const m = msg(chat, ADMIN, "چقد مونده");
+    await handleMessage(a, m, m.text!);
+    expect(lastText(a)).toContain("تسویه‌ست");
+  });
+
+  test("pending deal says not approved", async () => {
+    const chat = freshGroup();
+    const e = await createEntry(db, { chatId: chat.id, trade: trade(), createdBy: "@s", createdById: 1, createdAt: FIXED_NOW });
+    const a = app(nlu({ intent: "query_remaining", deal_code: e.code }));
+    const m = msg(chat, ADMIN, "چقد مونده");
+    await handleMessage(a, m, m.text!);
+    expect(lastText(a)).toContain("تایید نشده");
+  });
+
+  test("client_owes IRT uses the deposit wording", async () => {
+    const chat = freshGroup();
+    const deal = await approved(chat.id, trade());
+    await approved(chat.id, trade({ side: "PAY", amount: D(1000), rate: null }), deal.id);
+    const a = app(nlu({ intent: "query_remaining", deal_code: deal.code }));
+    const m = msg(chat, ADMIN, "مشتری چقد باید واریز کنه");
+    await handleMessage(a, m, m.text!);
+    expect(lastText(a)).toContain("مشتری باید <b>۲۶۶٬۰۰۰٬۰۰۰ تومان</b> دیگه واریز کنه");
+  });
+
+  test("a payment is not a deal", async () => {
+    const chat = freshGroup();
+    const p = await approved(chat.id, trade({ side: "RECEIVE", asset: "IRT", amount: D(5), rate: null }));
+    const a = app(nlu({ intent: "query_remaining", deal_code: p.code }));
+    const m = msg(chat, ADMIN, "چقد مونده");
+    await handleMessage(a, m, m.text!);
+    expect(lastText(a)).toContain("پرداخت");
+  });
+
+  test("no deal: account-level sentences", async () => {
+    const chat = freshGroup();
+    await approved(chat.id, trade({ amount: D(10), rate: D(1000) }));
+    const a = app(nlu({ intent: "query_remaining" }));
+    const m = msg(chat, CLIENT, "چقد دیگه مونده");
+    await handleMessage(a, m, m.text!);
+    expect(lastText(a)).toContain("ما باید <b>۱۰ تتر</b> دیگه بدیم");
+    expect(lastText(a)).toContain("مشتری باید <b>۱۰٬۰۰۰ تومان</b> دیگه واریز کنه");
+    expect(lastText(a)).not.toContain("مانده حساب");
+  });
+
+  test("no deal and nothing owed: settled account", async () => {
+    const a = app(nlu({ intent: "query_remaining" }));
+    const m = msg(freshGroup(), CLIENT, "چقد دیگه مونده");
+    await handleMessage(a, m, m.text!);
+    expect(lastText(a)).toContain("حساب کاملاً تسویه‌ست");
+  });
+
+  test("deal code from another chat is not found", async () => {
+    const other = freshGroup();
+    const deal = await approved(other.id, trade());
+    const a = app(nlu({ intent: "query_remaining", deal_code: deal.code }));
+    const m = msg(freshGroup(), CLIENT, "چقد مونده");
+    await handleMessage(a, m, m.text!);
+    expect(lastText(a)).toContain("این معامله پیدا نشد");
+    expect(lastText(a)).not.toContain("۱٬۰۰۰");
+  });
+
+  test("client in group sees only own chat even with a client_hint", async () => {
+    const chatA = freshGroup();
+    const chatB = freshGroup();
+    await approved(chatB.id, trade({ amount: D(777) }));
+    const a = app(nlu({ intent: "query_remaining", client_hint: "B" }));
+    const m = msg(chatA, CLIENT, "چقد مونده");
+    await handleMessage(a, m, m.text!);
+    expect(lastText(a)).not.toContain("۷۷۷");
+    expect(lastText(a)).toContain("تسویه‌ست");
+  });
+
+  test("admin private chat resolves the account by name", async () => {
+    const chatA = freshGroup();
+    const name = `Omega${chatA.id}`;
+    await upsertAccount(db, { chatId: chatA.id, title: name, type: "supergroup", at: FIXED_NOW, activated: true });
+    await approved(chatA.id, trade({ amount: D(42), rate: null }));
+    const priv = { id: ADMIN.id, type: "private" as const, first_name: "Sina" };
+    const a = app(nlu({ intent: "query_remaining", client_hint: name }));
+    const m = msg(priv, ADMIN, `${name} چقد مونده`);
+    await handleMessage(a, m, m.text!);
+    expect(lastText(a)).toContain("ما باید <b>۴۲ تتر</b> دیگه بدیم");
+  });
+
+  test("joke is appended", async () => {
+    const a = app(nlu({ intent: "query_remaining", joke: "شوخی" }));
+    const m = msg(freshGroup(), CLIENT, "چقد مونده");
+    await handleMessage(a, m, m.text!);
+    expect(lastText(a)).toContain("<i>شوخی</i>");
   });
 });
 

@@ -11,7 +11,7 @@ export interface NluInput {
 
 export const INTENTS = [
   "create_trade", "record_payment", "settle_deal", "edit_deal", "cancel_deal",
-  "query_balance", "query_deals", "query_price", "chitchat", "unclear",
+  "query_balance", "query_remaining", "query_deals", "query_price", "chitchat", "unclear",
 ] as const;
 
 export interface NluOutput {
@@ -54,6 +54,7 @@ NUMBERS
 INTENTS
 - create_trade (admin): a new buy/sell deal. record_payment (admin): a payment. settle_deal / edit_deal / cancel_deal (admin): act on an existing deal; put its code like D-00012 in deal_code, taken from the open deals list or the replied-to message. For edit_deal put only the changed fields in changes.
 - query_balance, query_deals: asking for a balance or a list of deals; put a client name in client_hint only if one is mentioned (use names from the account list as given).
+- query_remaining: the user asks how much is left / how much someone still has to pay or deliver, for a deal or for the account (e.g. «چقد دیگه مونده»، «چند تتر باید بدم»، «مشتری چقد باید واریز کنه»). Put the deal code in deal_code if one is mentioned (a replied-to card is resolved by the program). Never put numbers in reply or joke. Use query_balance (not this) for «مانده حساب / حساب ما چقدره», the full account card.
 - query_price: asking for a price; list coin symbols in coins (e.g. ["BTC"]; empty for USDT).
 - chitchat: greetings, thanks, banter, general questions. Put the Persian answer in reply.
 - unclear: if the message might be a deal or payment but you are not sure about side, direction, amount, which deal, or anything else, use unclear with a short Persian question in reply instead of guessing. A wrong ledger entry is far worse than a question.
@@ -62,7 +63,7 @@ MONEY FACTS
 - You never know the ledger. never state balances, amounts, debts or prices in reply or joke (no «۱۰۰ تتر بدهکاری», no «قیمت تتر ۲۷۰ هزار است»). For any question about them use query_balance, query_deals or query_price; the program answers with the real figures.
 
 ROLES
-- A client (role "client") may ONLY ask: balance, deals, price, or chitchat. If a client message sounds like a write (trade, payment, settle, edit, cancel), still report the intent you understood; the program refuses it.
+- A client (role "client") may ONLY ask: balance, remaining, deals, price, or chitchat. If a client message sounds like a write (trade, payment, settle, edit, cancel), still report the intent you understood; the program refuses it.
 - An admin may do everything.
 
 JOKES

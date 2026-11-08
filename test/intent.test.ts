@@ -7,6 +7,14 @@ const dec = (s: string) => new Decimal(s);
 const admin = { role: "admin" as const, usdtToman: dec("266001"), defaultAsset: "USDT" };
 
 describe("toAction", () => {
+  test("query_remaining maps to remaining, allowed for clients", () => {
+    expect(toAction({ intent: "query_remaining" }, admin)).toEqual({ kind: "remaining", dealCode: undefined });
+    expect(toAction({ intent: "query_remaining", deal_code: "D-00012" }, { ...admin, role: "client" })).toEqual({
+      kind: "remaining",
+      dealCode: "D-00012",
+    });
+  });
+
   test("create_trade", () => {
     const a = toAction(
       { intent: "create_trade", side: "BUY", amount_text: "۱۰۰", asset: "تتر", rate_text: "۲۷۵ هزار" },

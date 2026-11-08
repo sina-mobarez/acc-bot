@@ -233,6 +233,31 @@ export function debtLine(asset: string, owed: Decimal): string {
   return `🔵 ${name}: ما <b>${fa(owed.neg())}</b> ${name} به مشتری بدهکاریم`;
 }
 
+/** One-line "how much is left" sentence; toman owed by the client reads «واریز کنه». */
+function remainingLine(prefix: string, clientOwes: boolean, asset: string, amount: Decimal): string {
+  const amt = `<b>${fa(amount)} ${escapeHtml(assetName(asset))}</b>`;
+  if (!clientOwes) return `${prefix}ما باید ${amt} دیگه ${prefix ? "به مشتری " : ""}بدیم.`;
+  return `${prefix}مشتری باید ${amt} دیگه ${asset === TOMAN ? "واریز کنه" : "بده"}.`;
+}
+
+/** What is still open on one deal, one short line per leg; settled when none. */
+export function renderDealRemaining(code: string, legs: Leg[]): string {
+  const c = escapeHtml(code);
+  const open = legs.filter((l) => l.remaining.gt(0));
+  if (!open.length) return `<code>${c}</code> تسویه‌ست ✅`;
+  return open
+    .map((l) => remainingLine(`برای تسویه‌ی <code>${c}</code>، `, l.dir === "client_owes", l.asset, l.remaining))
+    .join("\n");
+}
+
+/** What is still open on the whole account, one short line per asset. */
+export function renderAccountRemaining(acc: Account): string {
+  const lines = debts(acc)
+    .filter(([, owed]) => !owed.isZero())
+    .map(([asset, owed]) => remainingLine("", owed.gt(0), asset, owed.abs()));
+  return lines.length ? lines.join("\n") : "حساب کاملاً تسویه‌ست ✅";
+}
+
 /** Lines per list in one message: keeps balance/reminder texts under Telegram's 4096-char limit. */
 export const MAX_LIST_LINES = 15;
 

@@ -11,6 +11,7 @@ export type Action =
   | { kind: "edit"; dealCode: string; changes: { amount?: Decimal; rate?: Decimal; note?: string } }
   | { kind: "cancel"; dealCode: string }
   | { kind: "balance"; clientHint?: string }
+  | { kind: "remaining"; dealCode?: string; clientHint?: string }
   | { kind: "deals"; clientHint?: string }
   | { kind: "price"; coins: string[] }
   | { kind: "reply"; text: string }
@@ -116,6 +117,8 @@ export function toAction(o: NluOutput, ctx: IntentCtx): Action {
     }
     case "query_balance":
       return { kind: "balance", clientHint: ctx.role === "admin" ? o.client_hint : undefined };
+    case "query_remaining":
+      return { kind: "remaining", dealCode: o.deal_code, clientHint: ctx.role === "admin" ? o.client_hint : undefined };
     case "query_deals":
       return { kind: "deals", clientHint: ctx.role === "admin" ? o.client_hint : undefined };
     case "query_price":
