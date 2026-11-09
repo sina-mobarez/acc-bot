@@ -249,12 +249,6 @@ export function renderAccountRemaining(acc: Account): string {
 /** Lines per list in one message: keeps balance/reminder texts under Telegram's 4096-char limit. */
 export const MAX_LIST_LINES = 15;
 
-/** The first `max` lines, then «و X مورد دیگر» for the rest. */
-function capLines(lines: string[], max = MAX_LIST_LINES): string[] {
-  if (lines.length <= max) return lines;
-  return [...lines.slice(0, max), `<i>… و ${fa(lines.length - max)} مورد دیگر</i>`];
-}
-
 function openDealLines(open: { id: number; legs: Leg[] }[]): string[] {
   const lines: string[] = [];
   for (const d of open.slice(0, MAX_LIST_LINES)) {
@@ -271,39 +265,27 @@ function openDealLines(open: { id: number; legs: Leg[] }[]): string[] {
   return lines;
 }
 
-export function renderBalance(name: string, acc: Account, open: { id: number; legs: Leg[] }[]): string {
+const BALANCE_ICON = new Map<string, string>([["IRT", "🇮🇷"], ["USDT", "💵"]]);
+
+/**
+ * The owner's simple balance card: one line per currency, signed from the client's side
+ * (minus = بدهکار, client owes us; plus = بستانکار, we owe them; zero = تسویه شده).
+ * IRT and USDT always show; other currencies only once touched.
+ */
+export function renderBalance(name: string, acc: Account): string {
   const n = escapeHtml(name);
   if (!acc.count) return `💼 هنوز معامله یا پرداخت تایید شده‌ای با «${n}» وجود ندارد.`;
-  const lines = [
-    `💼 <b>حساب با «${n}»</b>`,
-    "<i>بر اساس معاملات و پرداخت‌های تایید شده</i>",
-    LINE,
-    "🧮 <b>مانده حساب</b>",
-  ];
-  const d = debts(acc);
-  if (d.every(([, owed]) => owed.isZero())) lines.push("✅ حساب کاملاً تسویه است.");
-  else lines.push(...d.map(([asset, owed]) => debtLine(asset, owed)));
+  const owed = new Map(debts(acc));
+  const others = [...owed.keys()].filter((a) => a !== TOMAN && a !== "USDT").sort();
+  const lines = [`💼 <b>حساب «${n}»</b>`, LINE];
+  for (const asset of [TOMAN, "USDT", ...others]) {
+    const v = owed.get(asset) ?? new Decimal(0);
+    const client = v.neg(); // client's view: what they owe is negative
+    const label = v.isZero() ? "✅ تسویه شده" : v.gt(0) ? "🔴 بدهکار" : "🟢 بستانکار";
+    const icon = BALANCE_ICON.get(asset) ?? "🪙";
+    lines.push(`${icon} <b>${escapeHtml(asset)}</b>   <code>${v.isZero() ? fa(new Decimal(0)) : fa(client)}</code>  /  ${label}`);
+  }
   if (acc.unpriced) lines.push(`<i>⚠️ ${fa(acc.unpriced)} معامله بدون قیمت در مانده تومانی حساب نشده است.</i>`);
-
-  if (open.length) lines.push(LINE, "📂 <b>معاملات باز</b>", ...openDealLines(open));
-
-  for (const b of acc.trades) {
-    const nm = escapeHtml(assetName(b.asset));
-    lines.push(LINE, `📊 <b>معاملات ${nm}</b> · ${fa(b.count)} مورد`);
-    lines.push(`🟢 خرید: ${fa(b.bought)} ${nm}` + (b.buyToman.isZero() ? "" : ` — ${money(b.buyToman)} تومان`));
-    if (b.avgBuy) lines.push(`     میانگین خرید: ${money(b.avgBuy.toDecimalPlaces(0))} تومان`);
-    lines.push(`🔴 فروش: ${fa(b.sold)} ${nm}` + (b.sellToman.isZero() ? "" : ` — ${money(b.sellToman)} تومان`));
-    if (b.avgSell) lines.push(`     میانگین فروش: ${money(b.avgSell.toDecimalPlaces(0))} تومان`);
-  }
-
-  if (acc.paid.size || acc.received.size) {
-    const pays = [
-      ...[...acc.received].sort().map(([asset, amt]) => `📥 دریافتی از مشتری: ${fa(amt)} ${escapeHtml(assetName(asset))}`),
-      ...[...acc.paid].sort().map(([asset, amt]) => `💸 پرداختی به مشتری: ${fa(amt)} ${escapeHtml(assetName(asset))}`),
-    ];
-    lines.push(LINE, "💳 <b>پرداخت‌ها</b>", ...capLines(pays));
-  }
-  lines.push(LINE, "<i>ثبت پرداخت: «دریافت ۵۰ میلیون تومن» یا «پرداخت ۱۰۰ تتر»</i>");
   return lines.join("\n");
 }
 

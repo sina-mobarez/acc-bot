@@ -16,7 +16,7 @@ import {
 } from "../src/db";
 import { handleMessage } from "../src/handlers/message";
 import { BUSY_TEXT, CLIENT_WRITE_REFUSALS, GOUGING_LINES, gougingLine, ORDINARY_LINES, pick } from "../src/jokes";
-import { openDeals, summarize } from "../src/ledger";
+import { summarize } from "../src/ledger";
 import type { NluOutput } from "../src/nlu";
 import { TgError } from "../src/telegram";
 import type { Trade } from "../src/trade";
@@ -322,7 +322,7 @@ describe("queries", () => {
     const m = msg(chatA, CLIENT, "حساب Beta چقدره؟");
     await handleMessage(a, m, m.text!);
     const ledger = await approvedLedger(db, chatA.id);
-    const expected = renderBalance("Alpha", summarize(ledger.map((l) => l.trade)), openDeals(ledger));
+    const expected = renderBalance("Alpha", summarize(ledger.map((l) => l.trade)));
     expect(lastText(a)).toBe(expected);
     expect(lastText(a)).not.toContain("Beta");
   });
@@ -346,7 +346,7 @@ describe("queries", () => {
     const m = msg(priv, ADMIN, `بدهی ${name} چقدره؟`);
     await handleMessage(a, m, m.text!);
     const ledger = await approvedLedger(db, chatA.id);
-    expect(lastText(a)).toBe(renderBalance(name, summarize(ledger.map((l) => l.trade)), openDeals(ledger)));
+    expect(lastText(a)).toBe(renderBalance(name, summarize(ledger.map((l) => l.trade))));
     expect(a.nlu.inputs[0].accountNames).toContain(name);
   });
 

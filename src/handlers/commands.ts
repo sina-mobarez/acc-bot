@@ -3,7 +3,7 @@ import type { App } from "../app";
 import { onBroadcastCommand, onCancelCommand, onGroupsCommand } from "../broadcast";
 import { renderBalance, renderList } from "../cards";
 import { accountName, approvedLedger, getAccount, getSetting, isAdmin, recent } from "../db";
-import { openDeals, summarize } from "../ledger";
+import { summarize } from "../ledger";
 import { normalize } from "../money";
 import { botInfo } from "./update";
 
@@ -67,7 +67,7 @@ export async function handleCommand(app: App, msg: Message): Promise<void> {
       const name = account ? accountName(account) : (msg.chat.title ?? "");
       if (cmd === "balance") {
         const ledger = await approvedLedger(app.db, msg.chat.id);
-        return reply(app, msg, renderBalance(name, summarize(ledger.map((l) => l.trade)), openDeals(ledger)));
+        return reply(app, msg, renderBalance(name, summarize(ledger.map((l) => l.trade))));
       }
       const n = args[0] !== undefined ? normalize(args[0]) : "";
       const limit = /^\d+$/.test(n) ? Math.max(1, Math.min(40, Number(n))) : 15;

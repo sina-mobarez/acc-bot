@@ -13,7 +13,7 @@ In a client group, tag `@bot` or reply to one of its messages, then write normal
 @bot ۲۷ میلیون تومن پرداخت کردیم            <- payment sent to the client
 @bot تسویه                                   <- reply to a deal card: settle it against recorded payments
 @bot مقدار D-00012 رو ۵۰ کن / لغو D-00012      <- edit or cancel a deal by its card code
-@bot مانده حساب چنده؟                         <- balance
+@bot مانده حساب چنده؟                         <- balance: one line per currency (minus = بدهکار, plus = بستانکار)
 @bot قیمت تتر و بیت‌کوین چنده؟                 <- live prices (Nobitex, KuCoin)
 ```
 

@@ -1,7 +1,6 @@
 import Decimal from "decimal.js";
 import { describe, expect, it } from "vitest";
 import {
-  debtLine,
   editKeyboard,
   entryKeyboard,
   jalali,
@@ -120,7 +119,46 @@ describe("renderReminder / renderBalance", () => {
 
   it("says settled for a fully settled account", () => {
     const settled = summarize([trade(), trade({ side: "RECEIVE", rate: null, asset: "USDT" }), trade({ side: "PAY", rate: null, asset: "IRT", amount: D(266000000) })]);
-    expect(renderBalance("گروه", settled, [])).toContain("تسویه");
+    expect(renderBalance("گروه", settled)).toContain("تسویه شده");
+  });
+});
+
+describe("renderBalance: simple per-currency card (owner's sample)", () => {
+  // BUY 1000 USDT @ 266,000: client owes us 1000 USDT, we owe them 266,000,000 toman.
+  const out = renderBalance("PINGI | SHARIATI", summarize([trade()]));
+
+  it("one line per currency, from the client's side: minus = بدهکار, plus = بستانکار", () => {
+    const lines = out.split("\n");
+    const irt = lines.find((l) => l.includes("IRT"))!;
+    const usdt = lines.find((l) => l.includes("USDT"))!;
+    expect(usdt).toContain("-۱٬۰۰۰");
+    expect(usdt).toContain("بدهکار");
+    expect(irt).toContain("۲۶۶٬۰۰۰٬۰۰۰");
+    expect(irt).not.toContain("-");
+    expect(irt).toContain("بستانکار");
+    expect(lines.indexOf(irt)).toBeLessThan(lines.indexOf(usdt)); // IRT first, like the sample
+  });
+
+  it("drops the deal list, trade stats and payments sections", () => {
+    for (const gone of ["معاملات باز", "میانگین", "پرداخت‌ها", "📊", "ثبت پرداخت"]) expect(out).not.toContain(gone);
+    expect(out.split("\n").length).toBeLessThanOrEqual(5);
+  });
+
+  it("always shows IRT and USDT, zero as تسویه شده", () => {
+    const usdtOnly = renderBalance("گ", summarize([trade({ rate: null })])); // only a USDT leg
+    const irt = usdtOnly.split("\n").find((l) => l.includes("IRT"))!;
+    expect(irt).toContain("۰");
+    expect(irt).toContain("تسویه شده");
+  });
+
+  it("other touched currencies get their own line", () => {
+    expect(renderBalance("گ", summarize([trade({ asset: "BTC", amount: D(2), rate: null })]))).toContain("BTC");
+  });
+
+  it("escapes the group name and keeps the empty-account message", () => {
+    expect(out).toContain("PINGI | SHARIATI");
+    expect(renderBalance("<b>x</b>", summarize([]))).toContain("&lt;b&gt;x&lt;/b&gt;");
+    expect(renderBalance("گ", summarize([]))).toContain("وجود ندارد");
   });
 });
 
@@ -134,16 +172,11 @@ describe("Telegram's 4096-char limit", () => {
   const acc = summarize(ledger.map((l) => l.trade));
   const open = openDeals(ledger);
 
-  it("caps open deals but keeps the totals (balance)", () => {
+  it("balance stays short no matter how many deals are open", () => {
     expect(open).toHaveLength(60);
-    const out = renderBalance("گروه بزرگ", acc, open);
-    expect(out.length).toBeLessThan(4096);
-    expect(out).toContain("مانده حساب");
-    expect(out).toContain(dealCode(1000));
-    expect(out).toContain(dealCode(1014));
-    expect(out).not.toContain(dealCode(1015));
-    expect(out).toContain("و ۴۵ مورد دیگر");
-    for (const [asset, owed] of debts(acc)) expect(out).toContain(debtLine(asset, owed));
+    const out = renderBalance("گروه بزرگ", acc);
+    expect(out.length).toBeLessThan(500);
+    expect(out).not.toContain(dealCode(1000));
   });
 
   it("caps open deals but keeps the totals (reminder)", () => {
@@ -153,8 +186,8 @@ describe("Telegram's 4096-char limit", () => {
     expect(out).toContain("بدهکارید");
   });
 
-  it("a short list is not capped", () => {
-    expect(renderBalance("گ", acc, open.slice(0, 3))).not.toContain("مورد دیگر");
+  it("a short reminder list is not capped", () => {
+    expect(renderReminder("گ", acc, open.slice(0, 3), "یادآوری")).not.toContain("مورد دیگر");
   });
 });
 
@@ -164,7 +197,7 @@ describe("group name escaping", () => {
   const outputs: [string, string][] = [
     ["renderList", renderList(name, [entry()])],
     ["renderList (empty)", renderList(name, [])],
-    ["renderBalance", renderBalance(name, acc, [])],
+    ["renderBalance", renderBalance(name, acc)],
     ["renderReminder", renderReminder(name, acc, [], "x")],
   ];
   it.each(outputs)("%s escapes the name", (_n, out) => {

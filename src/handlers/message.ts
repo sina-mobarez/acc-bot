@@ -258,7 +258,7 @@ async function dispatch(c: Ctx, action: Action, joke: string | undefined, out: N
       let body: string;
       if (action.kind === "balance") {
         const ledger = await approvedLedger(app.db, target.chatId);
-        body = renderBalance(target.name, summarize(ledger.map((l) => l.trade)), openDeals(ledger));
+        body = renderBalance(target.name, summarize(ledger.map((l) => l.trade)));
       } else {
         body = renderList(target.name, await recent(app.db, target.chatId, 15));
       }
