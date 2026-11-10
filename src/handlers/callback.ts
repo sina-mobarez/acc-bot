@@ -57,6 +57,20 @@ export async function editText(
   }
 }
 
+/**
+ * A cancelled card leaves the chat: delete it. Telegram refuses for old messages (over 48 hours),
+ * so fall back to showing it as cancelled. Returns whether it was deleted.
+ */
+export async function removeCard(app: App, chatId: number, msgId: number): Promise<boolean> {
+  try {
+    await app.tg.call("deleteMessage", { chat_id: chatId, message_id: msgId });
+    return true;
+  } catch (e) {
+    if (!(e instanceof TgError)) throw e;
+    return false;
+  }
+}
+
 /** Re-render the clicked card (or its whole settlement batch) in its current state. */
 async function showCard(c: Ctx, entry: Entry, extra = "", confirmCancel = false): Promise<void> {
   const { app } = c;
@@ -94,6 +108,8 @@ export async function settlementStillValid(app: App, chatId: number, batch: Entr
     return !!leg && leg.remaining.gte(n.sum);
   });
 }
+
+const CANCELLED = (code: string) => `🚫 ${code} لغو شد`;
 
 export type DecideResult = "done" | "already" | "stale";
 
@@ -156,14 +172,17 @@ async function cancelRequest(c: Ctx, entry: Entry): Promise<void> {
   }
   if (entry.status !== "pending") return answer(app, c.q, ALREADY, true);
   if (!(await cancelPending(app, entry, c.actor))) return answer(app, c.q, ALREADY, true);
-  await showCard(c, entry);
-  await answer(app, c.q);
+  if (!(await removeCard(app, c.chatId, c.msgId))) await showCard(c, entry);
+  await answer(app, c.q, CANCELLED(entry.code));
 }
 
 async function cancelConfirm(c: Ctx, entry: Entry): Promise<void> {
   const { app } = c;
   const { ok, unlinked } = await cancelApproved(app, entry, c.actor);
   if (!ok) return answer(app, c.q, ALREADY, true);
+  if (await removeCard(app, c.chatId, c.msgId)) {
+    return answer(app, c.q, unlinked > 0 ? `${CANCELLED(entry.code)}\n${UNLINKED_NOTE}` : CANCELLED(entry.code), unlinked > 0);
+  }
   const lines: string[] = [];
   if (unlinked > 0) lines.push(`ℹ️ ${UNLINKED_NOTE}`);
   const owed = debts(summarize((await approvedLedger(app.db, c.chatId)).map((l) => l.trade)));

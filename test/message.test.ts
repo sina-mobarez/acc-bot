@@ -247,8 +247,8 @@ describe("refusals and fallbacks", () => {
     expect(e.status).toBe("pending");
     expect(GOUGING_LINES.length).toBeGreaterThanOrEqual(6);
     expect(e.joke).toBe(gougingLine(m.message_id, D(266000), D(279300)));
-    expect(lastText(a)).toContain("۲۶۶٬۰۰۰");
-    expect(e.joke).toContain("۲۶۶٬۰۰۰");
+    expect(lastText(a)).toContain("۲۶۶,۰۰۰");
+    expect(e.joke).toContain("۲۶۶,۰۰۰");
   });
 
   test("NL SELL far below Nobitex is teased too", async () => {
@@ -258,7 +258,7 @@ describe("refusals and fallbacks", () => {
     await handleMessage(a, m, m.text!);
     const [e] = await recent(db, chat.id, 5);
     expect(ORDINARY_LINES).not.toContain(e.joke);
-    expect(e.joke).toContain("۲۶۶٬۰۰۰");
+    expect(e.joke).toContain("۲۶۶,۰۰۰");
   });
 
   test("NL trade without deviation and empty joke gets an ordinary line", async () => {
@@ -380,7 +380,7 @@ describe("queries", () => {
     await handleMessage(a, m, m.text!);
     expect(nobitexCalls).toBe(1);
     expect(lastText(a)).toContain("BTC");
-    expect(lastText(a)).toContain("۲۶۶٬۰۰۰");
+    expect(lastText(a)).toContain("۲۶۶,۰۰۰");
   });
 });
 
@@ -451,8 +451,8 @@ describe("query_remaining", () => {
     const m = msg(chat, CLIENT, "چقد دیگه مونده؟", { reply_to_message: BOT_CARD(chat, deal) });
     await handleMessage(a, m, m.text!);
     const t = lastText(a);
-    expect(t).toContain("۲۰۰٬۰۰۰٬۰۰۰ تومان");
-    expect(t).toContain("۱٬۰۰۰ تتر");
+    expect(t).toContain("۲۰۰,۰۰۰,۰۰۰ تومان");
+    expect(t).toContain("۱,۰۰۰ تتر");
     expect(t).toContain(deal.code);
     expect(t).not.toContain("مانده حساب");
   });
@@ -484,7 +484,7 @@ describe("query_remaining", () => {
     const a = app(nlu({ intent: "query_remaining", deal_code: deal.code }));
     const m = msg(chat, ADMIN, "مشتری چقد باید واریز کنه");
     await handleMessage(a, m, m.text!);
-    expect(lastText(a)).toContain("مشتری باید <b>۲۶۶٬۰۰۰٬۰۰۰ تومان</b> دیگه واریز کنه");
+    expect(lastText(a)).toContain("مشتری باید <b>۲۶۶,۰۰۰,۰۰۰ تومان</b> دیگه واریز کنه");
   });
 
   test("a payment is not a deal", async () => {
@@ -503,7 +503,7 @@ describe("query_remaining", () => {
     const m = msg(chat, CLIENT, "چقد دیگه مونده");
     await handleMessage(a, m, m.text!);
     expect(lastText(a)).toContain("ما باید <b>۱۰ تتر</b> دیگه بدیم");
-    expect(lastText(a)).toContain("مشتری باید <b>۱۰٬۰۰۰ تومان</b> دیگه واریز کنه");
+    expect(lastText(a)).toContain("مشتری باید <b>۱۰,۰۰۰ تومان</b> دیگه واریز کنه");
     expect(lastText(a)).not.toContain("مانده حساب");
   });
 
@@ -521,7 +521,7 @@ describe("query_remaining", () => {
     const m = msg(freshGroup(), CLIENT, "چقد مونده");
     await handleMessage(a, m, m.text!);
     expect(lastText(a)).toContain("این معامله پیدا نشد");
-    expect(lastText(a)).not.toContain("۱٬۰۰۰");
+    expect(lastText(a)).not.toContain("۱,۰۰۰");
   });
 
   test("client in group sees only own chat even with a client_hint", async () => {
@@ -673,7 +673,7 @@ describe("deal actions", () => {
     await handleMessage(a, m, m.text!);
     const row = await db.prepare("SELECT payload_json FROM pending_actions WHERE entry_id = ?").bind(deal.id).first<{ payload_json: string }>();
     expect(JSON.parse(row!.payload_json)).toEqual({ rate: "250000" });
-    expect(String(a.tg.calls.at(-1)!.params.text)).toContain("۲٬۰۰۰ ");
+    expect(String(a.tg.calls.at(-1)!.params.text)).toContain("۲,۰۰۰ ");
   });
 
   test("edit of a cancelled deal is refused", async () => {

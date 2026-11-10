@@ -131,8 +131,8 @@ export function fmtNum(v: Decimal): string {
 }
 
 const TO_FA = "۰۱۲۳۴۵۶۷۸۹";
-/** Format a number (or any string) with Persian digits. */
+/** Format a number (or any string) with Persian digits: "26,435.05" -> "۲۶,۴۳۵/۰۵" (the Persian decimal slash). */
 export function fa(v: Decimal | number | string): string {
   const s = v instanceof Decimal ? fmtNum(v) : String(v);
-  return s.replace(/[0-9,.]/g, (c) => (c === "," ? "٬" : c === "." ? "٫" : TO_FA[Number(c)]));
+  return s.replace(/[0-9.]/g, (c) => (c === "." ? "/" : TO_FA[Number(c)]));
 }

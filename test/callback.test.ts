@@ -182,11 +182,24 @@ describe("settlement batch sums", () => {
 });
 
 describe("cancel", () => {
-  test("cancel pending cancels directly", async () => {
+  test("cancel pending cancels directly and deletes the card", async () => {
     const chat = freshChat();
     const e = await mk(chat, deal());
-    await handleCallback(makeApp(), cb(chat, `cx:${e.id}`));
+    const app = makeApp();
+    await handleCallback(app, cb(chat, `cx:${e.id}`));
     expect((await getEntry(db, e.id))!.status).toBe("cancelled");
+    expect(calls(app, "deleteMessage")).toEqual([{ chat_id: chat, message_id: 50 }]);
+    expect(calls(app, "editMessageText")).toHaveLength(0);
+  });
+
+  test("a card that can't be deleted is edited to cancelled instead", async () => {
+    const chat = freshChat();
+    const p = await mk(chat, pay());
+    const app = makeApp();
+    app.tg.fail("deleteMessage", chat, new TgError(400, "Bad Request: message can't be deleted"));
+    await handleCallback(app, cb(chat, `cx:${p.id}`));
+    expect((await getEntry(db, p.id))!.status).toBe("cancelled");
+    expect(String(calls(app, "editMessageText")[0].text)).toContain("لغو شد");
   });
 
   test("cancel approved needs confirm", async () => {
@@ -202,7 +215,7 @@ describe("cancel", () => {
     expect((await getEntry(db, e.id))!.status).toBe("cancelled");
     const { results } = await db.prepare("SELECT action FROM entry_events WHERE entry_id = ?").bind(e.id).all();
     expect(results.map((r) => r.action)).toEqual(["cancel"]);
-    expect(String(calls(app, "editMessageText").at(-1)!.text)).toContain("مانده حساب");
+    expect(calls(app, "deleteMessage")).toEqual([{ chat_id: chat, message_id: 50 }]);
   });
 
   test("cn restores the normal keyboard", async () => {
@@ -225,7 +238,7 @@ describe("cancel", () => {
     const kept = (await getEntry(db, p.id))!;
     expect(kept.status).toBe("approved");
     expect(kept.linkedDealId).toBeNull();
-    expect(String(calls(app, "editMessageText")[0].text)).toContain("پرداخت‌های مرتبط باقی ماندند و به حساب کلی برگشتند");
+    expect(calls(app, "deleteMessage")).toHaveLength(1);
   });
 });
 
@@ -250,7 +263,7 @@ describe("edit proposals", () => {
     const second = String(calls(app, "editMessageText").find((x) => x.message_id === 61)!.text);
     expect(second).toContain("قبل");
     expect(second).toContain("۱۰۰ ");
-    expect(second).toContain("۲۷۰٬۰۰۰");
+    expect(second).toContain("۲۷۰,۰۰۰");
     expect(second).toContain("۳۰۰ ");
   });
 

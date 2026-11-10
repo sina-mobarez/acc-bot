@@ -37,7 +37,8 @@ test("fmtNum", () => {
 });
 
 test("fa", () => {
-  expect(fa(new Decimal("27500000"))).toBe("۲۷٬۵۰۰٬۰۰۰");
+  expect(fa(new Decimal("27500000"))).toBe("۲۷,۵۰۰,۰۰۰");
+  expect(fa(new Decimal("26435.05"))).toBe("۲۶,۴۳۵/۰۵");
   expect(fa(27500000)).toBe("۲۷۵۰۰۰۰۰");
 });
 

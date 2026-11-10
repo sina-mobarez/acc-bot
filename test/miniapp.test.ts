@@ -306,6 +306,8 @@ describe("entries", () => {
     expect(r.status).toBe(200);
     expect(r.json).toMatchObject({ unlinked: true, entry: { status: "cancelled" } });
     expect(await getEntry(db, p.id)).toMatchObject({ status: "approved", linkedDealId: null });
+    expect(app.tg.calls.filter((c) => c.method === "deleteMessage").map((c) => c.params)).toEqual([{ chat_id: chat, message_id: 5 }]);
+    expect(app.tg.calls.filter((c) => c.method === "editMessageText")).toHaveLength(0);
     const sent = app.tg.calls.filter((c) => c.method === "sendMessage");
     expect(sent).toHaveLength(1);
     expect(sent[0].params.chat_id).toBe(chat);

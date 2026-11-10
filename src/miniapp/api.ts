@@ -8,7 +8,7 @@ import {
   setSetting, type Status, transition, updateAccount, deleteSetting, type Network,
 } from "../db";
 import {
-  cancelApproved, cancelPending, decideEntry, notifyChange, STALE_SETTLEMENT, UNLINKED_NOTE,
+  cancelApproved, cancelPending, decideEntry, notifyChange, removeCard, STALE_SETTLEMENT, UNLINKED_NOTE,
 } from "../handlers/callback";
 import { DEFAULT_DEVIATION_PCT, expandRateShorthand, parseDeviationSetting } from "../intent";
 import { debts, type Leg, type LedgerEntry, openDeals, summarize } from "../ledger";
@@ -325,7 +325,9 @@ async function cancel({ app, actor }: Ctx, id: number) {
   } else {
     throw conflict("این مورد قبلاً بررسی شده است.");
   }
-  const fresh = await refreshCard(app, id);
+  let fresh = await entryOrThrow(app, id);
+  if (fresh.cardMsgId === null || !(await removeCard(app, fresh.chatId, fresh.cardMsgId))) fresh = await refreshCard(app, id);
+  else fresh = { ...fresh, cardMsgId: null }; // the notice can't reply to a deleted card
   await notifyChange(app, fresh, panelNotice(fresh, "🚫 <b>لغو از پنل مدیریت</b>", note));
   return { entry: entryJson(fresh), unlinked: note !== "" };
 }

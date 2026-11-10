@@ -69,9 +69,13 @@ function int(v: unknown): Decimal | null {
 async function getJson(f: typeof fetch, url: string, init: RequestInit = {}): Promise<any | null> {
   try {
     const res = await f(url, { ...init, signal: AbortSignal.timeout(TIMEOUT_MS) });
-    if (res.status !== 200) return null;
+    if (res.status !== 200) {
+      console.warn("chain lookup failed", new URL(url).host, res.status, (await res.text().catch(() => "")).slice(0, 200));
+      return null;
+    }
     return await res.json();
-  } catch {
+  } catch (e) {
+    console.warn("chain lookup failed", new URL(url).host, String(e));
     return null;
   }
 }

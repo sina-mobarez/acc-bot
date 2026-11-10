@@ -63,7 +63,7 @@ describe("jalali", () => {
 describe("renderEntry", () => {
   it("shows the toman breakdown for a by-toman trade", () => {
     const t = trade({ amount: D("1893.94"), rate: D(264000), tomanTotal: D(500000000) });
-    expect(renderEntry(entry({ trade: t }))).toContain("۵۰۰٬۰۰۰٬۰۰۰ ÷ ۲۶۴٬۰۰۰");
+    expect(renderEntry(entry({ trade: t }))).toContain("۵۰۰,۰۰۰,۰۰۰ ÷ ۲۶۴,۰۰۰");
   });
 
   it("never shows the Nobitex price on a deal card (owner request)", () => {
@@ -109,9 +109,9 @@ describe("renderReminder / renderBalance", () => {
 
   it("lists both what the client owes and what we owe", () => {
     const out = renderReminder("گروه", acc, [], "یادآوری");
-    expect(out).toContain("۱٬۰۰۰");
+    expect(out).toContain("۱,۰۰۰");
     expect(out).toContain("تتر");
-    expect(out).toContain("۲۶۶٬۰۰۰٬۰۰۰");
+    expect(out).toContain("۲۶۶,۰۰۰,۰۰۰");
     expect(out).toContain("تومان");
     expect(out).toContain("ما هم");
   });
@@ -135,9 +135,9 @@ describe("renderBalance: simple per-currency card (owner's sample)", () => {
     const lines = out.split("\n");
     const irt = lines.find((l) => l.includes("IRT"))!;
     const usdt = lines.find((l) => l.includes("USDT"))!;
-    expect(usdt).toContain("-۱٬۰۰۰");
+    expect(usdt).toContain("-۱,۰۰۰");
     expect(usdt).toContain("بدهکار");
-    expect(irt).toContain("۲۶۶٬۰۰۰٬۰۰۰");
+    expect(irt).toContain("۲۶۶,۰۰۰,۰۰۰");
     expect(irt).not.toContain("-");
     expect(irt).toContain("بستانکار");
     expect(lines.indexOf(irt)).toBeLessThan(lines.indexOf(usdt)); // IRT first, like the sample
