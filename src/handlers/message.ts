@@ -54,7 +54,7 @@ const ORPHAN_ACTOR = "ربات (کارت ارسال نشد)";
  * Send the card for just-created pending entries; if Telegram refuses, cancel them so no
  * pending entry is left without a card to approve it from, then rethrow.
  */
-async function sendCard(c: Ctx, ids: number[], text: string, keyboard: Keyboard | null): Promise<number> {
+export async function sendCard(c: Pick<Ctx, "app" | "msg" | "chatId">, ids: number[], text: string, keyboard: Keyboard | null): Promise<number> {
   try {
     return await send(c, text, keyboard);
   } catch (e) {
@@ -63,7 +63,7 @@ async function sendCard(c: Ctx, ids: number[], text: string, keyboard: Keyboard 
   }
 }
 
-const who = (u: User | undefined): string =>
+export const who = (u: User | undefined): string =>
   !u ? "?" : u.username ? `@${u.username}` : [u.first_name, u.last_name].filter(Boolean).join(" ");
 
 /** Best-effort "typing…" while Gemini (often 7-11 s on the free tier) works. */
@@ -71,7 +71,7 @@ function typing(c: Pick<Ctx, "app" | "chatId">): void {
   c.app.defer(c.app.tg.call("sendChatAction", { chat_id: c.chatId, action: "typing" }).catch(() => undefined));
 }
 
-async function send(c: Pick<Ctx, "app" | "msg" | "chatId">, text: string, keyboard?: Keyboard | null): Promise<number> {
+export async function send(c: Pick<Ctx, "app" | "msg" | "chatId">, text: string, keyboard?: Keyboard | null): Promise<number> {
   const res = await c.app.tg.call<{ message_id: number }>("sendMessage", {
     chat_id: c.chatId,
     text,

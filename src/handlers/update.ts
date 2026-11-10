@@ -5,6 +5,7 @@ import { getSetting, getUserState, isAdmin, markUpdateSeen, migrateChat, upsertA
 import { handleCallback } from "./callback";
 import { handleCommand } from "./commands";
 import { handleMessage } from "./message";
+import { handleTxScan, txScanTarget } from "./txscan";
 
 export async function botInfo(app: App): Promise<{ id: number; username: string }> {
   const [id, username] = await Promise.all([getSetting(app.db, "bot_id"), getSetting(app.db, "bot_username")]);
@@ -90,6 +91,14 @@ export async function handleUpdate(app: App, u: Update): Promise<void> {
       if (!fromAdmin && !(msg.text?.startsWith("/") && PUBLIC_COMMANDS.has(commandName(msg.text)))) return;
     } else if (!activated) {
       return; // a group no admin has spoken in yet: silent for everyone
+    }
+
+    if (msg.chat.type !== "private") {
+      const target = txScanTarget(msg, await botInfo(app), fromAdmin);
+      if (target) {
+        await handleTxScan(app, msg, target);
+        return;
+      }
     }
 
     if (msg.text?.startsWith("/")) {

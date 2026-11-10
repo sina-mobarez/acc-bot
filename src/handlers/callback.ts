@@ -12,11 +12,12 @@ import {
 import { allocate, debts, summarize } from "../ledger";
 import { applyTradeEdit } from "../parser";
 import { isNotModified, TgError } from "../telegram";
+import { handleTxPick } from "./txscan";
 import { isPayment } from "../trade";
 
 const NOT_ALLOWED = "شما اجازه این کار را ندارید.";
-const ALREADY = "این مورد قبلاً بررسی شده است.";
-const NOT_FOUND = "این مورد پیدا نشد.";
+export const ALREADY = "این مورد قبلاً بررسی شده است.";
+export const NOT_FOUND = "این مورد پیدا نشد.";
 const NOT_EDITABLE = "این مورد دیگر قابل ویرایش نیست.";
 export const STALE_SETTLEMENT =
   "معامله‌ی مرتبط قبلاً (به‌طور کامل یا جزئی) تسویه شده است؛ این تسویه رد شد. در صورت نیاز دوباره تسویه را صادر کنید.";
@@ -33,14 +34,14 @@ interface Ctx {
   actor: string;
 }
 
-async function answer(app: App, q: CallbackQuery, text?: string, alert = false): Promise<void> {
+export async function answer(app: App, q: CallbackQuery, text?: string, alert = false): Promise<void> {
   await app.tg.call("answerCallbackQuery", {
     callback_query_id: q.id,
     ...(text ? { text, ...(alert ? { show_alert: true } : {}) } : {}),
   });
 }
 
-async function editText(
+export async function editText(
   app: App, chatId: number, msgId: number, text: string, keyboard: Keyboard | null,
 ): Promise<void> {
   try {
@@ -232,6 +233,8 @@ async function discardEdit(c: Ctx, actionId: number): Promise<void> {
 export async function handleCallback(app: App, q: CallbackQuery): Promise<void> {
   if (/^(bc:(go|no)|bd:\d+|bdy:\d+|bdn:\d+)$/.test(q.data ?? "")) return handleBroadcastCallback(app, q);
   if (!(await isAdmin(app.db, app.adminIds, q.from.id))) return answer(app, q, NOT_ALLOWED, true);
+  const tp = /^tp:(\d+):(\d+)$/.exec(q.data ?? "");
+  if (tp) return handleTxPick(app, q, Number(tp[1]), Number(tp[2]));
   const m = /^(ok|no|cx|cy|cn|ea|ed):(\d+)$/.exec(q.data ?? "");
   const msg = q.message;
   if (!m || !msg) return answer(app, q);
