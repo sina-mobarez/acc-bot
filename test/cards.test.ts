@@ -6,12 +6,15 @@ import {
   jalali,
   renderBalance,
   renderEntry,
+  renderTxScan,
+  txPickerKeyboard,
   renderList,
   renderReminder,
   renderSettlement,
   settlementKeyboard,
 } from "../src/cards";
-import { dealCode, type Entry } from "../src/db";
+import { dealCode, type Entry, type TxMeta } from "../src/db";
+import { fa } from "../src/money";
 import { debts, openDeals, summarize } from "../src/ledger";
 import { createTg, isForbidden, TgError } from "../src/telegram";
 import type { Trade } from "../src/trade";
@@ -282,5 +285,57 @@ describe("renderSettlement", () => {
     const rejected = renderSettlement(deal, [payment({ status: "rejected", ...decided })]);
     expect(rejected).toContain("رد شد");
     expect(rejected).toContain("رد توسط Sina");
+  });
+});
+
+describe("transaction scan cards", () => {
+  const TRON_HASH = "e9eb6c53b09f9f7b502dd31f7e1200c17e97b3b3c01884087f0900a4e52ad94a";
+  const meta = (over: Partial<TxMeta> = {}): TxMeta => ({
+    network: "TRON",
+    hash: TRON_HASH,
+    counterparty: "TWTV2WWNBZ9crFQyv1mnoFTDi25YDrjsBZ",
+    confirmations: 2,
+    final: false,
+    fee: D("6.7735"),
+    feeAsset: "TRX",
+    warnings: ["تراکنش هنوز <قطعی> نشده"],
+    ...over,
+  });
+  const receive = trade({ side: "RECEIVE", rate: null });
+
+  it("RECEIVE entry with tx shows explorer link, short counterparty, fee and warnings", () => {
+    const html = renderEntry(entry({ trade: receive, tx: meta(), linkedDealId: 3 }));
+    expect(html).toContain(`href="https://tronscan.org/#/transaction/${TRON_HASH}"`);
+    expect(html).toContain("TWTV2W…jsBZ");
+    expect(html).toContain(fa(D("6.7735")));
+    expect(html).toContain("TRX");
+    expect(html).toContain(dealCode(3));
+    expect(html).toContain("⚠️ تراکنش هنوز &lt;قطعی&gt; نشده");
+    expect(html).not.toContain("<قطعی>");
+  });
+
+  it("entry without tx has no tx block", () => {
+    expect(renderEntry(entry({ trade: receive }))).not.toContain("tronscan");
+  });
+
+  it("renderTxScan shows amount, tx block, note and asks which deal", () => {
+    const html = renderTxScan(
+      { id: 4, chatId: -100, side: "RECEIVE", amount: D(1000), meta: meta({ warnings: [] }), createdBy: "c", createdById: 2,
+        sourceMsgId: 1, createdAt: "2026-11-08T12:00:00+03:30", status: "pending" },
+      "یادداشت <x>",
+    );
+    expect(html).toContain(fa(D(1000)));
+    expect(html).toContain("tronscan.org");
+    expect(html).toContain("یادداشت &lt;x&gt;");
+    expect(html).toContain("کدام معامله");
+  });
+
+  it("picker keyboard: at most 8 deals then the no-deal button; callback_data fits 64 bytes", () => {
+    const deals = Array.from({ length: 10 }, (_, i) => ({ id: 100000 + i, code: dealCode(100000 + i), remaining: D("1234.56") }));
+    const kb = txPickerKeyboard(987654321, deals);
+    expect(kb.inline_keyboard).toHaveLength(9);
+    expect(kb.inline_keyboard[0][0].callback_data).toBe("tp:987654321:100000");
+    expect(kb.inline_keyboard[8][0]).toEqual({ text: "بدون معامله", callback_data: "tp:987654321:0" });
+    for (const row of kb.inline_keyboard) for (const b of row) expect(new TextEncoder().encode(b.callback_data).length).toBeLessThanOrEqual(64);
   });
 });

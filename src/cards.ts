@@ -1,11 +1,13 @@
 /** Persian rendering (Telegram HTML): cards, keyboards, lists, balances, prices. Layout follows the v1 Python cards (see git history). */
 import Decimal from "decimal.js";
-import { dealCode, type Entry, type Status } from "./db";
+import { explorerUrl } from "./chain";
+import { dealCode, type Entry, type Status, type TxMeta, type TxScan } from "./db";
 import type { Account, Leg } from "./ledger";
 import { debts } from "./ledger";
 import { assetName, fa, TOMAN } from "./money";
 import type { CoinQuote, UsdtPrice } from "./prices";
 import { byToman, isPayment, type Side, type Trade, tradeTotal } from "./trade";
+import { networkName } from "./txscan";
 
 export const LINE = "━━━━━━━━━━━━━━━━━━";
 
@@ -83,6 +85,11 @@ export function renderEntry(e: Entry, o: EntryOpts = {}): string {
     lines.push(`🧾 <b>مبلغ کل:</b> ${money(total)} تومان`);
   }
   if (t.note) lines.push(`📝 <b>توضیحات:</b> ${escapeHtml(t.note)}`);
+  if (e.tx) {
+    lines.push(LINE, ...txLines(e.tx));
+    if (e.linkedDealId !== null) lines.push(`🔗 <b>معامله:</b> <code>${dealCode(e.linkedDealId)}</code>`);
+    for (const w of e.tx.warnings) lines.push(`⚠️ ${escapeHtml(w)}`);
+  }
 
   const [statusIcon, status] = STATUS[e.status];
   lines.push(LINE, `🕒 ${jalali(e.createdAt)}`, `✍️ ثبت توسط ${escapeHtml(e.createdBy)}`);
@@ -98,6 +105,45 @@ export function renderEntry(e: Entry, o: EntryOpts = {}): string {
   if (o.confirmCancel) lines.push("", "⚠️ <b>این مورد تایید شده است. مطمئن هستید که لغو شود؟</b>");
   if (o.error) lines.push("", `⚠️ ${escapeHtml(o.error)}`);
   return lines.join("\n");
+}
+
+const short = (s: string): string => (s.length > 12 ? `${s.slice(0, 6)}…${s.slice(-4)}` : s);
+
+/** Network, other side, confirmations, fee and the explorer link of a scanned transaction. */
+function txLines(m: TxMeta): string[] {
+  const url = escapeHtml(explorerUrl(m.network, m.hash)).replace(/"/g, "&quot;");
+  return [
+    `🌐 <b>شبکه:</b> ${escapeHtml(networkName(m.network))}`,
+    `👤 <b>طرف مقابل:</b> <code>${escapeHtml(short(m.counterparty))}</code>`,
+    `🔁 <b>تأییدها:</b> ${fa(m.confirmations)} ${m.final ? "✅ قطعی" : "⏳ هنوز قطعی نیست"}`,
+    `⛽️ <b>کارمزد شبکه:</b> ${fa(m.fee)} ${m.feeAsset}`,
+    `🔎 <b>هش:</b> <a href="${url}">${escapeHtml(short(m.hash))}</a>`,
+  ];
+}
+
+/** A scanned transfer waiting for an admin to pick its deal. */
+export function renderTxScan(s: TxScan, note?: string): string {
+  const [icon, side] = SIDE[s.side];
+  const lines = [
+    `${icon} <b>${side} ${fa(s.amount)} ${escapeHtml(assetName("USDT"))}</b> (${DIRECTION[s.side]})`,
+    LINE,
+    ...txLines(s.meta),
+  ];
+  for (const w of s.meta.warnings) lines.push(`⚠️ ${escapeHtml(w)}`);
+  if (note) lines.push("", `ℹ️ ${escapeHtml(note)}`);
+  lines.push("", "<b>این تراکنش برای کدام معامله است؟</b> (فقط مدیر)");
+  return lines.join("\n");
+}
+
+export const MAX_PICKER_DEALS = 8;
+
+/** One button per open deal (oldest first, at most 8), then "no deal". */
+export function txPickerKeyboard(scanId: number, deals: { id: number; code: string; remaining: Decimal }[]): Keyboard {
+  const rows = deals
+    .slice(0, MAX_PICKER_DEALS)
+    .map((d) => [btn(`${d.code} · ${fa(d.remaining)} تتر`, `tp:${scanId}:${d.id}`)]);
+  rows.push([btn("بدون معامله", `tp:${scanId}:0`)]);
+  return { inline_keyboard: rows };
 }
 
 export type Keyboard = { inline_keyboard: { text: string; callback_data: string }[][] };
