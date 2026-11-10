@@ -48,7 +48,7 @@ interface Ctx {
 }
 
 /** cancelled_by for entries whose card could not be sent. */
-const ORPHAN_ACTOR = "ربات (کارت ارسال نشد)";
+export const ORPHAN_ACTOR = "ربات (کارت ارسال نشد)";
 
 /**
  * Send the card for just-created pending entries; if Telegram refuses, cancel them so no

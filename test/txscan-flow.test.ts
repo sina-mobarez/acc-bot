@@ -322,6 +322,33 @@ describe("refusals", () => {
   });
 });
 
+describe("review fixes", () => {
+  test("no wallet for any candidate network → not a scan: no lookup, plain chatter stays silent", async () => {
+    await db.prepare("DELETE FROM settings WHERE key IN ('wallet_tron', 'wallet_bsc')").run();
+    const chat = await group();
+    const log: string[] = [];
+    const app = appWith({ tron: tronFixture }, log);
+    await handleUpdate(app, upd(msg(chat, `btc txid ${tronHash()}`)));
+    expect(log).toEqual([]);
+    expect(sent(app)).toEqual([]);
+  });
+
+  test("picker: Telegram edit fails after the insert → entry cancelled, scan claimable again", async () => {
+    const chat = await group();
+    const app = appWith({ tron: tronFixture });
+    const h = tronHash();
+    await handleUpdate(app, upd(msg(chat, h)));
+    const kb = (sent(app).at(-1)!.reply_markup as { inline_keyboard: { callback_data: string }[][] }).inline_keyboard;
+    const data = kb.at(-1)![0].callback_data;
+    app.tg.fail("editMessageText", chat, new Error("telegram 502"));
+    await expect(handleCallback(app, cb(chat, data, ADMIN.id, 1))).rejects.toThrow("502");
+    expect(await findActiveByTx(db, "TRON", h)).toBeNull();
+    const ok = appWith({ tron: tronFixture });
+    await handleCallback(ok, cb(chat, data, ADMIN.id, 1));
+    expect((await findActiveByTx(db, "TRON", h))?.status).toBe("pending");
+  });
+});
+
 describe("routing", () => {
   test("# message containing a hash goes to the legacy parser, not the scan", async () => {
     const chat = await group();

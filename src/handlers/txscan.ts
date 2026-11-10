@@ -9,14 +9,14 @@ import { entryKeyboard, renderEntry, renderTxScan, txPickerKeyboard } from "../c
 import { findTxHash, type HashRef, lookupTx, type Network, type TxInfo } from "../chain";
 import {
   approvedLedger, createEntry, createTxScan, dealCode, DuplicateTxError, type Entry, findActiveByTx, findByCardMessage, getEntry,
-  getSetting, releaseTxScan, setCardMessage, takeTxScan, type TxMeta, type TxScan,
+  getSetting, releaseTxScan, setCardMessage, takeTxScan, transition, type TxMeta, type TxScan,
 } from "../db";
 import { allocate, type Leg, openDeals } from "../ledger";
 import {
   classify, DEAL_MISFIT, dealFit, DUPLICATE, LOOKUP_ERROR, NOT_FOUND, parseWallet, warnings,
 } from "../txscan";
 import { ALREADY, answer, editText, NOT_FOUND as ENTRY_NOT_FOUND } from "./callback";
-import { send, sendCard, who } from "./message";
+import { ORPHAN_ACTOR, send, sendCard, who } from "./message";
 import { isAddressed } from "./update";
 
 export interface ScanTarget {
@@ -42,6 +42,12 @@ export function txScanTarget(msg: Message, bot: { id: number; username: string }
     if (mentioned && ref) return { ref, dealMsgId: null };
   }
   return null;
+}
+
+/** Whether a wallet is set for any of these networks; with none there is nothing to check, so it isn't a scan. */
+export async function hasWallet(app: App, networks: Network[]): Promise<boolean> {
+  for (const n of networks) if ((await wallet(app, n)) !== null) return true;
+  return false;
 }
 
 const shortHash = (h: string) => `${h.slice(0, 8)}…${h.slice(-6)}`;
@@ -141,6 +147,9 @@ export async function handleTxPick(app: App, q: CallbackQuery, scanId: number, d
   if (!m) return answer(app, q);
   const scan = await takeTxScan(app.db, scanId);
   if (!scan) return answer(app, q, ALREADY, true);
+
+  // Until the entry exists, any failure gives the button back.
+  let entry: Entry;
   try {
     if (scan.chatId !== m.chat.id) {
       await releaseTxScan(app.db, scanId);
@@ -155,11 +164,7 @@ export async function handleTxPick(app: App, q: CallbackQuery, scanId: number, d
       }
     }
     const leg = deal ? await legOf(app, deal, scan.side) : null;
-    const meta: TxMeta = {
-      ...scan.meta,
-      warnings: warnings({ ...scan.meta, amount: scan.amount, deal, leg }),
-    };
-    let entry: Entry;
+    const meta: TxMeta = { ...scan.meta, warnings: warnings({ ...scan.meta, amount: scan.amount, deal, leg }) };
     try {
       entry = await createEntry(app.db, {
         chatId: scan.chatId,
@@ -174,13 +179,22 @@ export async function handleTxPick(app: App, q: CallbackQuery, scanId: number, d
     } catch (e) {
       if (!(e instanceof DuplicateTxError)) throw e;
       await editText(app, m.chat.id, m.message_id, DUPLICATE(null), null);
-      return answer(app, q, DUPLICATE(null).replace(/<[^>]+>/g, ""), true);
+      return answer(app, q, DUPLICATE(null), true);
     }
-    await setCardMessage(app.db, entry.id, m.message_id);
-    await editText(app, m.chat.id, m.message_id, renderEntry(entry), entryKeyboard(entry));
-    return answer(app, q);
   } catch (e) {
     await releaseTxScan(app.db, scanId);
     throw e;
   }
+
+  // The entry exists: if its card can't be shown, cancel it (as sendCard does) and give the button back,
+  // so no pending entry is left without ✅/❌ and the admin can simply press again.
+  try {
+    await setCardMessage(app.db, entry.id, m.message_id);
+    await editText(app, m.chat.id, m.message_id, renderEntry(entry), entryKeyboard(entry));
+  } catch (e) {
+    await transition(app.db, [entry.id], "pending", "cancelled", { cancelledBy: ORPHAN_ACTOR, cancelledAt: app.now() });
+    await releaseTxScan(app.db, scanId);
+    throw e;
+  }
+  await answer(app, q);
 }
