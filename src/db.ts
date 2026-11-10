@@ -8,6 +8,29 @@ export type Status = "pending" | "approved" | "rejected" | "cancelled";
 
 export const dealCode = (id: number): string => `D-${String(id).padStart(5, "0")}`;
 
+/** A chain the transaction scan understands. */
+export type Network = "TRON" | "BSC";
+
+/** What a scanned transaction showed when it was checked (kept on the entry for its card). */
+export interface TxMeta {
+  network: Network;
+  hash: string;
+  counterparty: string;
+  confirmations: number;
+  final: boolean;
+  fee: Decimal;
+  feeAsset: "TRX" | "BNB";
+  warnings: string[];
+}
+
+/** A live entry already holds this transaction (the unique index refused the insert). */
+export class DuplicateTxError extends Error {
+  constructor() {
+    super("transaction already recorded");
+    this.name = "DuplicateTxError";
+  }
+}
+
 export interface Entry {
   id: number;
   chatId: number;
@@ -25,6 +48,7 @@ export interface Entry {
   decidedAt: string | null;
   cancelledBy: string | null;
   cancelledAt: string | null;
+  tx: TxMeta | null;
 }
 
 export interface NewEntry {
@@ -36,6 +60,7 @@ export interface NewEntry {
   batchId?: string | null;
   status?: Status;
   sourceMsgId?: number | null;
+  tx?: TxMeta | null;
   createdBy: string;
   createdById: number;
   createdAt: string;
@@ -78,6 +103,7 @@ function entryFromRow(r: Row): Entry {
     decidedAt: str(r.decided_at),
     cancelledBy: str(r.cancelled_by),
     cancelledAt: str(r.cancelled_at),
+    tx: r.tx_json === null || r.tx_json === undefined ? null : txMetaFromJson(String(r.tx_json)),
   };
 }
 
@@ -97,6 +123,13 @@ export const tradeToJson = (t: Trade): string =>
     tomanTotal: decText(t.tomanTotal),
   });
 
+export const txMetaToJson = (m: TxMeta): string => JSON.stringify({ ...m, fee: m.fee.toFixed() });
+
+export function txMetaFromJson(json: string): TxMeta {
+  const o = JSON.parse(json) as Omit<TxMeta, "fee"> & { fee: string };
+  return { ...o, fee: new Decimal(o.fee) };
+}
+
 function assertTrade(t: Trade): void {
   if (t.tomanTotal !== null && t.rate === null) {
     throw new Error("entry with toman_total must have a rate");
@@ -111,15 +144,21 @@ export async function createEntry(db: D1Database, e: NewEntry): Promise<Entry> {
   const res = await db
     .prepare(
       `INSERT INTO entries (chat_id, kind, amount, asset, rate, toman_total, note, raw_text, joke,
-         linked_deal_id, batch_id, status, source_msg_id, created_by, created_by_id, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         linked_deal_id, batch_id, status, source_msg_id, created_by, created_by_id, created_at,
+         tx_network, tx_hash, tx_json)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .bind(
       e.chatId, t.side, t.amount.toFixed(), t.asset, decText(t.rate), decText(t.tomanTotal), t.note,
       e.rawText ?? "", e.joke ?? null, e.linkedDealId ?? null, e.batchId ?? null, e.status ?? "pending",
       e.sourceMsgId ?? null, e.createdBy, e.createdById, e.createdAt,
+      e.tx?.network ?? null, e.tx?.hash ?? null, e.tx ? txMetaToJson(e.tx) : null,
     )
-    .run();
+    .run()
+    .catch((err: unknown) => {
+      if (e.tx && String(err).includes("UNIQUE constraint failed")) throw new DuplicateTxError();
+      throw err;
+    });
   const entry = await getEntry(db, Number(res.meta.last_row_id));
   if (!entry) throw new Error("entry vanished after insert");
   return entry;
@@ -750,6 +789,73 @@ export async function takePendingAction(
     .bind(to, id)
     .first<Row>();
   return r ? pendingFromRow(r) : null;
+}
+
+// --- transaction scans -----------------------------------------------------------
+
+/** The pending or approved entry that holds this transaction, if any. */
+export async function findActiveByTx(db: D1Database, network: Network, hash: string): Promise<Entry | null> {
+  const r = await db
+    .prepare("SELECT * FROM entries WHERE tx_network = ? AND tx_hash = ? AND status IN ('pending','approved')")
+    .bind(network, hash)
+    .first<Row>();
+  return r ? entryFromRow(r) : null;
+}
+
+export interface TxScan {
+  id: number;
+  chatId: number;
+  side: "PAY" | "RECEIVE";
+  amount: Decimal;
+  meta: TxMeta;
+  createdBy: string;
+  createdById: number;
+  sourceMsgId: number | null;
+  createdAt: string;
+  status: "pending" | "used";
+}
+
+const scanFromRow = (r: Row): TxScan => ({
+  id: Number(r.id),
+  chatId: Number(r.chat_id),
+  side: r.side as TxScan["side"],
+  amount: new Decimal(String(r.amount)),
+  meta: txMetaFromJson(String(r.meta_json)),
+  createdBy: String(r.created_by),
+  createdById: Number(r.created_by_id),
+  sourceMsgId: num(r.source_msg_id),
+  createdAt: String(r.created_at),
+  status: r.status as TxScan["status"],
+});
+
+export async function createTxScan(db: D1Database, s: Omit<TxScan, "id" | "status">): Promise<number> {
+  const res = await db
+    .prepare(
+      `INSERT INTO tx_scans (chat_id, side, amount, meta_json, created_by, created_by_id, source_msg_id, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .bind(s.chatId, s.side, s.amount.toFixed(), txMetaToJson(s.meta), s.createdBy, s.createdById, s.sourceMsgId, s.createdAt)
+    .run();
+  return Number(res.meta.last_row_id);
+}
+
+export async function getTxScan(db: D1Database, id: number): Promise<TxScan | null> {
+  const r = await db.prepare("SELECT * FROM tx_scans WHERE id = ?").bind(id).first<Row>();
+  return r ? scanFromRow(r) : null;
+}
+
+/** Atomically claim a waiting scan (compare-and-set pending -> used); null if already taken. */
+export async function takeTxScan(db: D1Database, id: number): Promise<TxScan | null> {
+  const r = await db
+    .prepare("UPDATE tx_scans SET status = 'used' WHERE id = ? AND status = 'pending' RETURNING *")
+    .bind(id)
+    .first<Row>();
+  return r ? scanFromRow(r) : null;
+}
+
+/** Undo a claim whose follow-up failed, so the button works again. */
+export async function releaseTxScan(db: D1Database, id: number): Promise<void> {
+  await db.prepare("UPDATE tx_scans SET status = 'pending' WHERE id = ? AND status = 'used'").bind(id).run();
 }
 
 // --- broadcasts -----------------------------------------------------------------

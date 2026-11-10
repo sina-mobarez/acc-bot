@@ -8,6 +8,13 @@ import {
   cancelEntry,
   createEntry,
   createPendingAction,
+  createTxScan,
+  DuplicateTxError,
+  findActiveByTx,
+  getTxScan,
+  releaseTxScan,
+  takeTxScan,
+  type TxMeta,
   deleteAccount,
   deleteEntry,
   dealCode,
@@ -338,5 +345,71 @@ describe("deleteAccount", () => {
     expect(await n("SELECT COUNT(*) AS n FROM entry_events WHERE entry_id = ?", eb.id)).toBe(1);
     expect(await n("SELECT COUNT(*) AS n FROM broadcast_messages WHERE chat_id = ?", b)).toBe(1);
     expect(await deleteAccount(db, a)).toBe(false);
+  });
+});
+
+describe("transaction scans", () => {
+  let n = 0;
+  const meta = (over: Partial<TxMeta> = {}): TxMeta => ({
+    network: "TRON",
+    hash: `${String(++n).padStart(4, "0")}${"ab".repeat(30)}`,
+    counterparty: "TWTV2WWNBZ9crFQyv1mnoFTDi25YDrjsBZ",
+    confirmations: 2,
+    final: false,
+    fee: D("6.7735"),
+    feeAsset: "TRX",
+    warnings: ["⚠️ هنوز قطعی نشده"],
+    ...over,
+  });
+  const pay = trade({ side: "RECEIVE", rate: null, amount: D("1000") });
+
+  test("createEntry with tx round-trips TxMeta", async () => {
+    const m = meta();
+    const e = await mk(freshChat(), pay, { tx: m });
+    const got = (await getEntry(db, e.id))!.tx!;
+    expect(got.fee.eq(m.fee)).toBe(true);
+    expect({ ...got, fee: null }).toEqual({ ...m, fee: null });
+    expect((await mk(freshChat())).tx).toBeNull();
+  });
+
+  test("second active entry with the same tx throws DuplicateTxError", async () => {
+    const m = meta();
+    await mk(freshChat(), pay, { tx: m });
+    await expect(mk(freshChat(), pay, { tx: m })).rejects.toBeInstanceOf(DuplicateTxError);
+  });
+
+  test("same tx allowed again after the first is rejected", async () => {
+    const m = meta();
+    const first = await mk(freshChat(), pay, { tx: m });
+    expect(await transition(db, [first.id], "pending", "rejected")).toBe(true);
+    const again = await mk(freshChat(), pay, { tx: m });
+    expect(again.tx?.hash).toBe(m.hash);
+  });
+
+  test("findActiveByTx finds pending/approved only", async () => {
+    const m = meta({ network: "BSC", hash: `0x${"cd".repeat(31)}${String(++n).padStart(2, "0")}` });
+    expect(await findActiveByTx(db, "BSC", m.hash)).toBeNull();
+    const e = await mk(freshChat(), pay, { tx: m });
+    expect((await findActiveByTx(db, "BSC", m.hash))?.id).toBe(e.id);
+    expect(await findActiveByTx(db, "TRON", m.hash)).toBeNull();
+    await transition(db, [e.id], "pending", "approved");
+    expect((await findActiveByTx(db, "BSC", m.hash))?.id).toBe(e.id);
+    await cancelEntry(db, e.id, "approved", "x", AT);
+    expect(await findActiveByTx(db, "BSC", m.hash)).toBeNull();
+  });
+
+  test("takeTxScan claims once; releaseTxScan makes it claimable again", async () => {
+    const m = meta();
+    const id = await createTxScan(db, {
+      chatId: 77, side: "RECEIVE", amount: D("1000.5"), meta: m, createdBy: "c", createdById: 9, sourceMsgId: 3, createdAt: AT,
+    });
+    const s = (await getTxScan(db, id))!;
+    expect(s.status).toBe("pending");
+    expect(s.amount.eq("1000.5")).toBe(true);
+    expect(s.meta.fee.eq(m.fee)).toBe(true);
+    expect((await takeTxScan(db, id))?.id).toBe(id);
+    expect(await takeTxScan(db, id)).toBeNull();
+    await releaseTxScan(db, id);
+    expect((await takeTxScan(db, id))?.status).toBe("used");
   });
 });

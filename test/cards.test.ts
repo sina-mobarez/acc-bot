@@ -47,6 +47,7 @@ const entry = (over: Partial<Entry> = {}): Entry => ({
   decidedAt: null,
   cancelledBy: null,
   cancelledAt: null,
+  tx: null,
   ...over,
 });
 
