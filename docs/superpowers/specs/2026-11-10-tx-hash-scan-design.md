@@ -73,8 +73,9 @@ If one transaction has several USDT transfers touching our wallet, sum those in 
 
 ## Chain lookups
 
-- **TRON:** Tronscan API (`apilist.tronscanapi.com`, transaction-info by hash). It gives the status, confirmed flag, confirmations, TRC-20 transfer info and cost/fee. It needs a `TRONSCAN_API_KEY` secret (the free key, `TRON-PRO-API-KEY` header). USDT contract `TR7NHqjeKQxGTCi8q8ZYpYpxjhJ8Jtsk3x`, 6 decimals. Fee is in sun, so ÷ 1e6 gives TRX.
+- **TRON:** Tronscan API (`apilist.tronscanapi.com`, transaction-info by hash). It gives the status, confirmed flag, confirmations, TRC-20 transfer info and cost/fee. It works without a key (checked live on 2026-11-10); an optional `TRONSCAN_API_KEY` secret is sent as the `TRON-PRO-API-KEY` header when set, for higher rate limits. USDT contract `TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t`, 6 decimals. Fee is in sun, so ÷ 1e6 gives TRX.
 - **BSC:** *my call:* public BSC JSON-RPC (`eth_getTransactionReceipt`, `eth_blockNumber`). It needs no key; BscScan's free API no longer covers BSC. Status from the receipt; amount from `Transfer` logs of USDT `0x55d398326f99059fF775485246999027B3197955` (18 decimals); fee = `gasUsed × effectiveGasPrice` ÷ 1e18 BNB; confirmations = head block − tx block + 1. Make the RPC URL a constant (or an optional `BSC_RPC_URL` var).
+- Real responses are recorded in `test/fixtures/` (Tronscan transaction-info, BSC receipt).
 - Builder verifies field names against live responses and records real responses as test fixtures.
 - Each lookup is 1 to 3 subrequests with a 5 s timeout, like `prices.ts`. Uses `app.fetch` so tests can fake it.
 - Address comparison: BSC case-insensitive; TRON base58 exact (or convert both to one form).
