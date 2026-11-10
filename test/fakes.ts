@@ -92,3 +92,25 @@ export function makeApp(overrides: Partial<App> = {}): TestApp {
     ...overrides,
   } as TestApp;
 }
+
+/**
+ * Fake fetch for one JSON-RPC endpoint (accepts single or batch requests): `handler(method, params)`
+ * returns the `result`; throwing makes the whole request fail like a network error. Records calls.
+ */
+export function jsonRpcFetch(
+  handler: (method: string, params: unknown[]) => unknown,
+  calls: { url: string; body: unknown }[] = [],
+): typeof fetch {
+  return (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+    const body = JSON.parse(String(init?.body ?? "null"));
+    calls.push({ url, body });
+    const one = (r: { id: unknown; method: string; params?: unknown[] }) => ({
+      jsonrpc: "2.0",
+      id: r.id,
+      result: handler(r.method, r.params ?? []),
+    });
+    const out = Array.isArray(body) ? body.map(one) : one(body);
+    return new Response(JSON.stringify(out), { status: 200, headers: { "content-type": "application/json" } });
+  }) as typeof fetch;
+}
