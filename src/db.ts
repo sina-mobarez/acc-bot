@@ -664,6 +664,10 @@ export async function setSetting(db: D1Database, key: string, value: string): Pr
 }
 
 /** True if this update id is new (and is now recorded); false for a replay. */
+export async function deleteSetting(db: D1Database, key: string): Promise<void> {
+  await db.prepare("DELETE FROM settings WHERE key = ?").bind(key).run();
+}
+
 export async function markUpdateSeen(db: D1Database, updateId: number, at: string): Promise<boolean> {
   const res = await db
     .prepare("INSERT OR IGNORE INTO processed_updates (update_id, at) VALUES (?, ?)")

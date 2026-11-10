@@ -374,10 +374,18 @@ async function showSettings() {
   const dev = h("input", { inputmode: "decimal", value: set.deviation_pct });
   const uid = h("input", { inputmode: "numeric", placeholder: "شناسه‌ی عددی تلگرام" });
   const nm = h("input", { placeholder: "نام (اختیاری)" });
+  const wTron = h("input", { dir: "ltr", value: set.wallet_tron || "", placeholder: "T…" });
+  const wBsc = h("input", { dir: "ltr", value: set.wallet_bsc || "", placeholder: "0x…" });
   render("تنظیمات",
     h("h3", {}, "درصد انحراف قیمت"),
     h("div", { class: "card" }, h("label", { class: "f" }, "هشدار وقتی قیمت معامله از بازار بیش از این درصد فاصله دارد", dev),
       h("button", { class: "btn", onclick: async () => { if (await attempt(() => api("PATCH", "/api/settings", { deviation_pct: dev.value }))) { toast("ذخیره شد."); showSettings(); } } }, "ذخیره")),
+    h("h3", {}, "کیف پول‌ها (اسکن هش تراکنش)"),
+    h("div", { class: "card" },
+      h("label", { class: "f" }, "آدرس ترون (TRC20)", wTron),
+      h("label", { class: "f" }, "آدرس BSC (BEP20)", wBsc),
+      h("div", { class: "muted" }, "هش تراکنش تتر که در گروه فرستاده شود با این آدرس‌ها بررسی می‌شود. خالی بگذارید تا آن شبکه بررسی نشود."),
+      h("button", { class: "btn", onclick: async () => { if (await attempt(() => api("PATCH", "/api/settings", { wallet_tron: wTron.value.trim(), wallet_bsc: wBsc.value.trim() }))) { toast("ذخیره شد."); showSettings(); } } }, "ذخیره")),
     h("h3", {}, "یادآوری بدهی"),
     h("div", { class: "card" }, h("label", { class: "sw" }, h("span", {}, "یادآوری برای گروه‌های تازه روشن باشد"),
       h("input", { type: "checkbox", checked: set.reminders_default, onchange: async (e) => {

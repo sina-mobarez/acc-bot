@@ -380,10 +380,12 @@ describe("admins and settings", () => {
 
   test("reminders_default is exposed and validated", async () => {
     const app = appFor();
-    await db.prepare("DELETE FROM settings WHERE key IN ('deviation_pct', 'reminders_default')").run();
-    expect((await call(app, "GET", "/api/settings")).json).toEqual({ deviation_pct: "3", reminders_default: true });
+    await db.prepare("DELETE FROM settings WHERE key IN ('deviation_pct', 'reminders_default', 'wallet_tron', 'wallet_bsc')").run();
+    expect((await call(app, "GET", "/api/settings")).json).toEqual({
+      deviation_pct: "3", reminders_default: true, wallet_tron: null, wallet_bsc: null,
+    });
     expect((await call(app, "PATCH", "/api/settings", { reminders_default: false })).json).toEqual({
-      deviation_pct: "3", reminders_default: false,
+      deviation_pct: "3", reminders_default: false, wallet_tron: null, wallet_bsc: null,
     });
     expect(await getSetting(db, "reminders_default")).toBe("0");
     expect(await getSetting(db, "deviation_pct")).toBeNull(); // untouched by a partial patch
@@ -394,6 +396,21 @@ describe("admins and settings", () => {
     expect((await call(app, "PATCH", "/api/settings", { reminders_default: true })).json.reminders_default).toBe(true);
     expect(await getSetting(db, "reminders_default")).toBe("1");
     await db.prepare("DELETE FROM settings WHERE key = 'reminders_default'").run();
+  });
+
+  test("wallets: set (BSC lowercased), validated, cleared with an empty string", async () => {
+    const app = appFor();
+    const TRON = "TFxi6L2JoLudi9Y22nRJ9xtTHTCGpkGfT4";
+    const res = await call(app, "PATCH", "/api/settings", { wallet_tron: TRON, wallet_bsc: "0xA010EC4e43c6448f2FE13340991bEdedF8763bF4" });
+    expect(res.json).toMatchObject({ wallet_tron: TRON, wallet_bsc: "0xa010ec4e43c6448f2fe13340991bededf8763bf4" });
+    expect((await call(app, "GET", "/api/settings")).json).toMatchObject({ wallet_tron: TRON });
+    for (const bad of [{ wallet_tron: "TFxi6L2" }, { wallet_bsc: TRON }, { wallet_tron: 5 }, { wallet_bsc: null }]) {
+      expect((await call(app, "PATCH", "/api/settings", bad)).status, JSON.stringify(bad)).toBe(400);
+    }
+    expect((await call(app, "PATCH", "/api/settings", { wallet_tron: "" })).json).toMatchObject({ wallet_tron: null });
+    expect(await getSetting(db, "wallet_tron")).toBeNull();
+    expect((await call(app, "PATCH", "/api/settings", { wallet_bsc: "" }, 777)).status).toBe(403);
+    await db.prepare("DELETE FROM settings WHERE key IN ('wallet_tron', 'wallet_bsc')").run();
   });
 
   test("adding an admin sets their Mini App button, best-effort", async () => {

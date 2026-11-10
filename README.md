@@ -27,6 +27,14 @@ A deal card shows the numbers (no Nobitex price; a rate far from Nobitex only ch
 
 **Daily reminder.** At 10:00 Tehran time the bot posts a reminder in each group whose client owes us. Each group can turn it off in the Mini App; the settings tab has the on/off default for groups added later.
 
+**Transaction hash scan.** When someone posts a USDT transaction hash (TRON or BSC, bare or as a Tronscan/BscScan link) in a client group, the bot looks it up on chain. It doesn't need to be tagged, and Gemini isn't used. It checks that the transfer succeeded, is official USDT, and went to or came from our wallet for that network. Then it shows the amount, the confirmations and the network fee, and makes a pending payment card: «دریافت» when the USDT came into our wallet, «پرداخت» when it went out. An admin still has to approve the card.
+- Reply to a deal card with the hash, and the payment is linked to that deal.
+- Post the hash on its own, or tag the bot on someone else's hash message, and the bot lists the group's open deals that still owe USDT that way, plus «بدون معامله». Only an admin can pick.
+- The card warns when the transfer isn't final yet (TRON not confirmed, BSC under 15 confirmations), when the amount differs from what's left on the deal by 0.01 USDT or more, or when the deal isn't approved or is already settled. The admin decides.
+- A failed transfer, one that doesn't touch our wallet, an unknown hash (posted too early: send it again in a minute) or a hash that's already recorded gets a one-line refusal and no card.
+
+Clients can post hashes too. This is the one way a client can cause a card, and it stays pending until an admin approves it. Set the two wallet addresses in the Mini App settings; a network with no wallet isn't checked.
+
 ### Commands
 
 - Groups: `/deals [n]` (last n deals, default 15), `/balance`, `/help`, `/id`
@@ -36,7 +44,7 @@ Broadcast is admin-only. There is no "anyone" fallback.
 
 ### Mini App
 
-Opened from the bot's menu button or `/app`. Tabs: **داشبورد** (totals and KPIs), **مشتری‌ها** (accounts, balances), **معاملات** (deals with approve/reject/cancel), **تنظیمات** (admins, the price-deviation threshold and the reminder default). The «پنل مدیریت» menu button appears only in admins' private chats; everyone else sees the command menu.
+Opened from the bot's menu button or `/app`. Tabs: **داشبورد** (totals and KPIs), **مشتری‌ها** (accounts, balances), **معاملات** (deals with approve/reject/cancel), **تنظیمات** (admins, the price-deviation threshold, the reminder default and the TRON/BSC wallets for the hash scan). The «پنل مدیریت» menu button appears only in admins' private chats; everyone else sees the command menu.
 
 Deals, payments and customers can be deleted from the Mini App. Deletion is permanent (rows are removed, not hidden) and asks for two confirmations; a deleted deal's payments stay and fall back to FIFO.
 
@@ -54,17 +62,20 @@ npx wrangler secret put BOT_TOKEN
 npx wrangler secret put GEMINI_API_KEY
 npx wrangler secret put WEBHOOK_SECRET      # e.g. the output of: openssl rand -hex 32
 npx wrangler secret put ADMIN_IDS           # comma-separated Telegram user ids
+npx wrangler secret put TRONSCAN_API_KEY    # optional: a free Tronscan key, only for higher rate limits
 npm run deploy
 curl -X POST -H "X-Telegram-Bot-Api-Secret-Token: <WEBHOOK_SECRET>" https://acc-bot.<subdomain>.workers.dev/setup
 ```
 
 On a fresh Cloudflare account, `wrangler d1 create acc-bot` prints a `database_id`; put it in the `d1_databases` entry of `wrangler.jsonc` before migrating or deploying (the committed id belongs to the existing deployment).
 
-Migrations live in `migrations/`: `0001_init.sql` (schema), `0002_broadcast_work_index.sql` (indexes for the every-minute broadcast check) and `0003_account_activation.sql` (the `activated` flag; groups that already have entries start activated). `npm run db:migrate` applies all of them in order and skips the ones already applied, so run it after every pull that adds one.
+Migrations live in `migrations/`: `0001_init.sql` (schema), `0002_broadcast_work_index.sql` (indexes for the every-minute broadcast check) `0003_account_activation.sql` (the `activated` flag; groups that already have entries start activated) and `0004_tx_scan.sql` (transaction columns on entries, the one-live-entry-per-hash index, and `tx_scans` for scans waiting on a deal pick). `npm run db:migrate` applies all of them in order and skips the ones already applied, so run it after every pull that adds one.
 
 `WEBHOOK_SECRET` is sent by Telegram in a header, so it may only use `A-Z`, `a-z`, `0-9`, `_` and `-` (1 to 256 characters). `openssl rand -hex 32` gives a good one.
 
 `/setup` calls `getMe`, registers the webhook and the command lists, keeps the default menu button as the command menu and sets the Mini App button in each admin's private chat, and stores the bot id, username and public URL. Admins added later in the Mini App get the button right away. Re-run it after changing the URL or the secret. The response should show `webhook: true`. `GET /health/prices` checks the price sources.
+
+The hash scan uses Tronscan (`apilist.tronscanapi.com`, works without a key) and the public BSC node `https://bsc-dataseed.bnbchain.org`; set a `BSC_RPC_URL` var in `wrangler.jsonc` to use another node.
 
 Get your Telegram id with `/id` in a private chat with the bot.
 

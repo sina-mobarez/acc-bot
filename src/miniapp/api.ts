@@ -5,7 +5,7 @@ import { entryKeyboard, renderEntry } from "../cards";
 import {
   type Account, accountName, addAdmin, allApprovedByChat, approvedLedger, createEntry, deleteAccount, deleteEntry, editEntry, type Entry,
   getAccount, getEntry, getSetting, isAdmin, listAccounts, listAdmins, listEntries, recent, removeAdmin,
-  setSetting, type Status, transition, updateAccount,
+  setSetting, type Status, transition, updateAccount, deleteSetting, type Network,
 } from "../db";
 import {
   cancelApproved, cancelPending, decideEntry, notifyChange, STALE_SETTLEMENT, UNLINKED_NOTE,
@@ -17,6 +17,7 @@ import { applyTradeEdit } from "../parser";
 import { fetchUsdtToman, type UsdtPrice } from "../prices";
 import { TgError } from "../telegram";
 import { isPayment, type Side, type Trade } from "../trade";
+import { parseWallet } from "../txscan";
 import { validateInitData } from "./auth";
 import { setAdminMenuButton } from "./menu";
 
@@ -401,11 +402,21 @@ async function adminRemove({ app, url }: Ctx, rawId: string | null) {
   return adminsOf(app);
 }
 
+const WALLETS: [key: "wallet_tron" | "wallet_bsc", network: Network, label: string][] = [
+  ["wallet_tron", "TRON", "ترون (TRC20)"],
+  ["wallet_bsc", "BSC", "BSC (BEP20)"],
+];
+
 async function settingsGet({ app }: Ctx) {
-  const [dev, rem] = await Promise.all([getSetting(app.db, "deviation_pct"), getSetting(app.db, "reminders_default")]);
+  const [dev, rem, tron, bsc] = await Promise.all([
+    getSetting(app.db, "deviation_pct"), getSetting(app.db, "reminders_default"),
+    getSetting(app.db, "wallet_tron"), getSetting(app.db, "wallet_bsc"),
+  ]);
   return {
     deviation_pct: (parseDeviationSetting(dev) ?? new Decimal(DEFAULT_DEVIATION_PCT)).toFixed(),
     reminders_default: rem !== "0",
+    wallet_tron: tron ? parseWallet("TRON", tron) : null,
+    wallet_bsc: bsc ? parseWallet("BSC", bsc) : null,
   };
 }
 
@@ -419,9 +430,27 @@ async function settingsPatch(c: Ctx) {
     if (dev === null) throw bad("درصد انحراف باید عددی مثبت باشد.");
   }
   const rem = b.reminders_default === undefined ? undefined : flag(b.reminders_default, "یادآوری پیش‌فرض");
-  if (dev === null && rem === undefined) throw bad("چیزی برای تغییر نیست.");
+  // A wallet is an address (validated per network) or "" to clear it.
+  const wallets: [string, string | null][] = [];
+  for (const [key, network, label] of WALLETS) {
+    if (!Object.hasOwn(b, key)) continue;
+    const raw = b[key];
+    if (typeof raw !== "string") throw bad(`آدرس کیف پول ${label} معتبر نیست.`);
+    if (raw.trim() === "") {
+      wallets.push([key, null]);
+      continue;
+    }
+    const addr = parseWallet(network, raw);
+    if (addr === null) throw bad(`آدرس کیف پول ${label} معتبر نیست.`);
+    wallets.push([key, addr]);
+  }
+  if (dev === null && rem === undefined && !wallets.length) throw bad("چیزی برای تغییر نیست.");
   if (dev !== null) await setSetting(c.app.db, "deviation_pct", dev.toFixed());
   if (rem !== undefined) await setSetting(c.app.db, "reminders_default", rem ? "1" : "0");
+  for (const [key, addr] of wallets) {
+    if (addr === null) await deleteSetting(c.app.db, key);
+    else await setSetting(c.app.db, key, addr);
+  }
   return settingsGet(c);
 }
 
