@@ -62,76 +62,69 @@ export interface EntryOpts {
   confirmCancel?: boolean;
 }
 
+/** The typed-in reference of an entry: a tracking code for toman and deals, a hash for crypto payments. */
+function refLine(e: Pick<Entry, "trade" | "ref">): string | null {
+  if (!e.ref) return null;
+  const label = isPayment(e.trade) && e.trade.asset !== TOMAN ? "🔎 <b>هش:</b>" : "🔖 <b>کد پیگیری:</b>";
+  return `${label} <code>${escapeHtml(e.ref)}</code>`;
+}
+
+/**
+ * A deal or payment card: what it is, its numbers and its status, nothing else. Who recorded or
+ * approved it and when stay in D1 (and the Mini App), not on the card.
+ */
 export function renderEntry(e: Entry, o: EntryOpts = {}): string {
   const t = e.trade;
   const [icon, side] = SIDE[t.side];
   const name = escapeHtml(assetName(t.asset));
   const total = tradeTotal(t);
-  const lines = [`${icon} <b>${side} ${fa(t.amount)} ${name}</b>`, `🆔 <code>${e.code}</code>`, LINE];
+  const lines = [`${icon} <b>${side} ${fa(t.amount)} ${name}</b> · <code>${e.code}</code>`];
 
-  if (isPayment(t)) {
-    lines.push(`↔️ <b>جهت:</b> ${DIRECTION[t.side]}`);
-    lines.push(`💰 <b>مبلغ:</b> ${fa(t.amount)} ${name}`);
-  } else if (byToman(t) && total && t.rate) {
-    lines.push(`🧾 <b>مبلغ تومانی:</b> ${money(total)} تومان`);
-    lines.push(`💵 <b>قیمت واحد:</b> ${money(t.rate)} تومان`);
-    lines.push(`💰 <b>مقدار ${name}:</b> ${fa(t.amount)} ${name}`);
-    lines.push(`<i>   (= ${money(total)} ÷ ${money(t.rate)})</i>`);
-  } else {
-    lines.push(`💰 <b>مقدار:</b> ${fa(t.amount)} ${name}`);
+  if (!isPayment(t) && t.rate !== null && total) {
+    lines.push(`💵 <b>قیمت:</b> ${money(t.rate)} · <b>جمع:</b> ${money(total)} تومان`);
   }
-  if (t.rate !== null && !byToman(t) && total) {
-    lines.push(`💵 <b>قیمت واحد:</b> ${money(t.rate)} تومان`);
-    lines.push(`🧾 <b>مبلغ کل:</b> ${money(total)} تومان`);
-  }
-  if (t.note) lines.push(`📝 <b>توضیحات:</b> ${escapeHtml(t.note)}`);
-  if (e.tx) {
-    lines.push(LINE, ...txLines(e.tx));
-    if (e.linkedDealId !== null) lines.push(`🔗 <b>معامله:</b> <code>${dealCode(e.linkedDealId)}</code>`);
-    for (const w of e.tx.warnings) lines.push(`⚠️ ${escapeHtml(w)}`);
-  }
+  if (e.bank) lines.push(`🏦 <b>بانک:</b> ${escapeHtml(e.bank.name)}`);
+  const ref = refLine(e);
+  if (ref) lines.push(ref);
+  if (e.tx) lines.push(...txLines(e.tx));
+  if (isPayment(t) && e.linkedDealId !== null) lines.push(`🔗 <b>معامله:</b> <code>${dealCode(e.linkedDealId)}</code>`);
+  if (t.note) lines.push(`📝 ${escapeHtml(t.note)}`);
+  for (const w of e.tx?.warnings ?? []) lines.push(`⚠️ ${escapeHtml(w)}`);
 
   const [statusIcon, status] = STATUS[e.status];
-  lines.push(LINE, `🕒 ${jalali(e.createdAt)}`, `✍️ ثبت توسط ${escapeHtml(e.createdBy)}`);
-  if (e.joke) lines.push("", `<i>${escapeHtml(e.joke)}</i>`);
-  lines.push("", `${statusIcon} <b>وضعیت: ${status}</b>`);
-  if (e.status !== "pending" && e.decidedBy && e.decidedAt) {
-    const verb = e.status === "rejected" ? "رد" : "تایید";
-    lines.push(`<i>${verb} توسط ${escapeHtml(e.decidedBy)} · ${jalali(e.decidedAt)}</i>`);
-  }
-  if (e.status === "cancelled" && e.cancelledBy && e.cancelledAt) {
-    lines.push(`<i>لغو توسط ${escapeHtml(e.cancelledBy)} · ${jalali(e.cancelledAt)}</i>`);
-  }
+  lines.push(`${statusIcon} <b>${status}</b>`);
   if (o.confirmCancel) lines.push("", "⚠️ <b>این مورد تایید شده است. مطمئن هستید که لغو شود؟</b>");
   if (o.error) lines.push("", `⚠️ ${escapeHtml(o.error)}`);
   return lines.join("\n");
 }
 
+/** What a payment's reference is called: a tracking code for toman, a transaction hash for anything else. */
+export const refName = (t: Trade): string => (t.asset === TOMAN ? "کد پیگیری" : "هش تراکنش");
+
+/** A payment that is complete except for its reference: nothing is saved until an admin replies with it. */
+export function renderRefAsk(t: Trade, bank: string | null): string {
+  const [icon, side] = SIDE[t.side];
+  const head = `${icon} <b>${side} ${fa(t.amount)} ${escapeHtml(assetName(t.asset))}</b>` + (bank ? ` · 🏦 ${escapeHtml(bank)}` : "");
+  return `${head}\n🔖 <b>${refName(t)}</b> را در ریپلای همین پیام بفرست تا ثبت شود. بدون آن ثبت نمی‌شود.`;
+}
+
 const short = (s: string): string => (s.length > 12 ? `${s.slice(0, 6)}…${s.slice(-4)}` : s);
 
-/** Network, other side, confirmations, fee and the explorer link of a scanned transaction. */
+/** A scanned transaction in one line: network and explorer link, plus a second line while it isn't final. */
 function txLines(m: TxMeta): string[] {
   const url = escapeHtml(explorerUrl(m.network, m.hash)).replace(/"/g, "&quot;");
-  return [
-    `🌐 <b>شبکه:</b> ${escapeHtml(networkName(m.network))}`,
-    `👤 <b>طرف مقابل:</b> <code>${escapeHtml(short(m.counterparty))}</code>`,
-    `🔁 <b>تأییدها:</b> ${fa(m.confirmations)} ${m.final ? "✅ قطعی" : "⏳ هنوز قطعی نیست"}`,
-    `⛽️ <b>کارمزد شبکه:</b> ${fa(m.fee)} ${m.feeAsset}`,
-    `🔎 <b>هش:</b> <a href="${url}">${escapeHtml(short(m.hash))}</a>`,
-  ];
+  const lines = [`🔎 <b>${escapeHtml(networkName(m.network))}:</b> <a href="${url}">${escapeHtml(short(m.hash))}</a>`];
+  if (!m.final) lines.push(`⏳ هنوز قطعی نیست (${fa(m.confirmations)} تأیید)`);
+  return lines;
 }
 
 /** A scanned transfer waiting for an admin to pick its deal. */
 export function renderTxScan(s: TxScan, note?: string): string {
   const [icon, side] = SIDE[s.side];
-  const lines = [
-    `${icon} <b>${side} ${fa(s.amount)} ${escapeHtml(assetName("USDT"))}</b> (${DIRECTION[s.side]})`,
-    LINE,
-    ...txLines(s.meta),
-  ];
+  const lines = [`${icon} <b>${side} ${fa(s.amount)} ${escapeHtml(assetName("USDT"))}</b>`, ...txLines(s.meta)];
   for (const w of s.meta.warnings) lines.push(`⚠️ ${escapeHtml(w)}`);
   if (note) lines.push("", `ℹ️ ${escapeHtml(note)}`);
-  lines.push("", "<b>این تراکنش برای کدام معامله است؟</b> (فقط مدیر)");
+  lines.push("<b>برای کدام معامله؟</b> (فقط مدیر)");
   return lines.join("\n");
 }
 
@@ -168,36 +161,24 @@ export function entryKeyboard(e: Entry, confirmCancel = false): Keyboard | null 
   return null;
 }
 
-function tradeLine(t: Trade): string {
+function tradeLine(t: Trade, direction = true): string {
   const [icon, side] = SIDE[t.side];
   let line = `${icon} ${side} ${fa(t.amount)} ${escapeHtml(assetName(t.asset))}`;
   const total = tradeTotal(t);
-  if (isPayment(t)) line += ` (${DIRECTION[t.side]})`;
+  if (isPayment(t)) line += direction ? ` (${DIRECTION[t.side]})` : "";
   else if (t.rate !== null && total) line += ` × ${money(t.rate)} = <b>${money(total)}</b> تومان`;
   return line;
 }
 
-/** A deal together with the payments recorded alongside it, as one card for one decision. */
+/** A deal together with the payments recorded alongside it, as one short card for one decision. */
 export function renderSettlement(deal: Entry, payments: Entry[]): string {
   // The batch is decided as one: its status is the payments' status, not the (already approved) deal's.
-  const head = payments[0] ?? deal;
-  const [statusIcon, status] = STATUS[head.status];
-  const lines = [
-    `🧾 <b>معامله و تسویه</b>`,
-    `🆔 <code>${deal.code}</code>`,
-    LINE,
-    tradeLine(deal.trade),
-  ];
-  if (deal.trade.note) lines.push(`📝 ${escapeHtml(deal.trade.note)}`);
-  lines.push(LINE, "💳 <b>پرداخت‌ها</b>");
-  for (const p of payments) lines.push(tradeLine(p.trade));
-  lines.push(LINE, `🕒 ${jalali(deal.createdAt)}`, `✍️ ثبت توسط ${escapeHtml(deal.createdBy)}`);
-  if (deal.joke) lines.push("", `<i>${escapeHtml(deal.joke)}</i>`);
-  lines.push("", `${statusIcon} <b>وضعیت: ${status}</b>`);
-  if (head.status !== "pending" && head.decidedBy && head.decidedAt) {
-    const verb = head.status === "rejected" ? "رد" : "تایید";
-    lines.push(`<i>${verb} توسط ${escapeHtml(head.decidedBy)} · ${jalali(head.decidedAt)}</i>`);
+  const [statusIcon, status] = STATUS[(payments[0] ?? deal).status];
+  const lines = [`🧾 <b>تسویه</b> · <code>${deal.code}</code>`, tradeLine(deal.trade)];
+  for (const p of payments) {
+    lines.push(tradeLine(p.trade, false) + (p.bank ? ` · 🏦 ${escapeHtml(p.bank.name)}` : ""));
   }
+  lines.push(`${statusIcon} <b>${status}</b>`);
   return lines.join("\n");
 }
 
@@ -217,31 +198,18 @@ function describeTrade(t: Trade): string {
 
 export function renderEditProposal(e: Entry, next: Trade, _actionId: number | string): string {
   return [
-    `✏️ <b>پیشنهاد ویرایش</b> <code>${e.code}</code>`,
-    LINE,
-    `<b>قبل:</b>`,
-    describeTrade(e.trade),
-    "",
-    `<b>بعد:</b>`,
-    describeTrade(next),
-    LINE,
-    "اعمال شود؟",
+    `✏️ <b>ویرایش</b> · <code>${e.code}</code>`,
+    `<b>قبل:</b> ${describeTrade(e.trade)}`,
+    `<b>بعد:</b> ${describeTrade(next)}`,
   ].join("\n");
 }
 
-/** The outcome of an applied edit: the real before/after, then the updated card. */
+/** The outcome of an applied edit: the real before and after (the entry's own card is updated separately). */
 export function renderEditApplied(updated: Entry, before: Trade): string {
   return [
-    `✅ <b>ویرایش اعمال شد</b> <code>${updated.code}</code>`,
-    LINE,
-    `<b>قبل:</b>`,
-    describeTrade(before),
-    "",
-    `<b>بعد:</b>`,
-    describeTrade(updated.trade),
-    LINE,
-    "",
-    renderEntry(updated),
+    `✅ <b>ویرایش شد</b> · <code>${updated.code}</code>`,
+    `<b>قبل:</b> ${describeTrade(before)}`,
+    `<b>بعد:</b> ${describeTrade(updated.trade)}`,
   ].join("\n");
 }
 
@@ -354,6 +322,30 @@ export function renderReminder(
   }
   if (!clientOwes.length && !weOwe.length) lines.push("✅ حساب کاملاً تسویه است.");
   if (open.length) lines.push(LINE, "📂 <b>معاملات باز</b>", ...openDealLines(open));
+  return lines.join("\n");
+}
+
+/** Our own bank balances. Admins only, and never in a group. */
+export function renderBanks(banks: { name: string; balance: Decimal }[]): string {
+  if (!banks.length) return "🏦 هنوز بانکی تعریف نشده است. از پنل مدیریت، بخش «بانک‌ها» اضافه کنید.";
+  const lines = ["🏦 <b>موجودی بانک‌ها</b>", LINE];
+  let total = new Decimal(0);
+  for (const b of banks) {
+    total = total.plus(b.balance);
+    lines.push(`🏦 ${escapeHtml(b.name)}: <b>${money(b.balance)}</b> تومان`);
+  }
+  if (banks.length > 1) lines.push(LINE, `💰 <b>جمع:</b> ${money(total)} تومان`);
+  return lines.join("\n");
+}
+
+/** A deposit or withdrawal recorded straight on a bank (private chat), with the new balance. */
+export function renderBankMove(bank: string, amount: Decimal, note: string, balance: Decimal): string {
+  const lines = [
+    amount.gte(0) ? `📥 <b>واریز ${money(amount)} تومان</b>` : `💸 <b>برداشت ${money(amount.neg())} تومان</b>`,
+    `🏦 <b>بانک:</b> ${escapeHtml(bank)}`,
+  ];
+  if (note) lines.push(`📝 <b>توضیحات:</b> ${escapeHtml(note)}`);
+  lines.push(LINE, `💰 <b>موجودی:</b> ${money(balance)} تومان`, "✅ ثبت شد");
   return lines.join("\n");
 }
 

@@ -1,8 +1,9 @@
 /** D1 data access: entries and their history, accounts, admins, settings, bot bookkeeping. */
 import Decimal from "decimal.js";
+import type { BankRef } from "./banks";
 import type { LedgerEntry } from "./ledger";
-import "./money"; // applies the global decimal.js config
-import type { Side, Trade } from "./trade";
+import { TOMAN } from "./money"; // also applies the global decimal.js config
+import { isPayment, type Side, type Trade } from "./trade";
 
 export type Status = "pending" | "approved" | "rejected" | "cancelled";
 
@@ -49,6 +50,10 @@ export interface Entry {
   cancelledBy: string | null;
   cancelledAt: string | null;
   tx: TxMeta | null;
+  /** Our bank account a toman payment went into or came out of. */
+  bank: BankRef | null;
+  /** A typed-in reference: a toman payment's tracking code (کد پیگیری) or a crypto transaction hash. */
+  ref: string | null;
 }
 
 export interface NewEntry {
@@ -61,6 +66,8 @@ export interface NewEntry {
   status?: Status;
   sourceMsgId?: number | null;
   tx?: TxMeta | null;
+  bankId?: number | null;
+  ref?: string | null;
   createdBy: string;
   createdById: number;
   createdAt: string;
@@ -104,6 +111,11 @@ function entryFromRow(r: Row): Entry {
     cancelledBy: str(r.cancelled_by),
     cancelledAt: str(r.cancelled_at),
     tx: r.tx_json === null || r.tx_json === undefined ? null : txMetaFromJson(String(r.tx_json)),
+    bank:
+      r.bank_id === null || r.bank_id === undefined || r.bank_name === null || r.bank_name === undefined
+        ? null
+        : { id: Number(r.bank_id), name: String(r.bank_name) },
+    ref: str(r.ref),
   };
 }
 
@@ -123,12 +135,23 @@ export const tradeToJson = (t: Trade): string =>
     tomanTotal: decText(t.tomanTotal),
   });
 
+export function tradeFromJson(json: string): Trade {
+  const o = JSON.parse(json) as { side: Side; amount: string; asset: string; rate: string | null; note: string; tomanTotal: string | null };
+  return { side: o.side, amount: new Decimal(o.amount), asset: o.asset, rate: dec(o.rate), note: o.note, tomanTotal: dec(o.tomanTotal) };
+}
+
 export const txMetaToJson = (m: TxMeta): string => JSON.stringify({ ...m, fee: m.fee.toFixed() });
 
 export function txMetaFromJson(json: string): TxMeta {
   const o = JSON.parse(json) as Omit<TxMeta, "fee"> & { fee: string };
   return { ...o, fee: new Decimal(o.fee) };
 }
+
+/** Only a toman payment can sit on a bank account. */
+export const bankable = (t: Trade): boolean => isPayment(t) && t.asset === TOMAN;
+
+/** Entry rows with the bank's name alongside (entryFromRow reads it). */
+const ENTRIES = "SELECT *, (SELECT name FROM banks WHERE banks.id = entries.bank_id) AS bank_name FROM entries";
 
 function assertTrade(t: Trade): void {
   if (t.tomanTotal !== null && t.rate === null) {
@@ -141,18 +164,20 @@ function assertTrade(t: Trade): void {
 export async function createEntry(db: D1Database, e: NewEntry): Promise<Entry> {
   assertTrade(e.trade);
   const t = e.trade;
+  if (e.bankId != null && !bankable(t)) throw new Error("only a toman payment can have a bank");
   const res = await db
     .prepare(
       `INSERT INTO entries (chat_id, kind, amount, asset, rate, toman_total, note, raw_text, joke,
          linked_deal_id, batch_id, status, source_msg_id, created_by, created_by_id, created_at,
-         tx_network, tx_hash, tx_json)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         tx_network, tx_hash, tx_json, bank_id, ref)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .bind(
       e.chatId, t.side, t.amount.toFixed(), t.asset, decText(t.rate), decText(t.tomanTotal), t.note,
       e.rawText ?? "", e.joke ?? null, e.linkedDealId ?? null, e.batchId ?? null, e.status ?? "pending",
       e.sourceMsgId ?? null, e.createdBy, e.createdById, e.createdAt,
       e.tx?.network ?? null, e.tx?.hash ?? null, e.tx ? txMetaToJson(e.tx) : null,
+      e.bankId ?? null, e.ref ?? null,
     )
     .run()
     .catch((err: unknown) => {
@@ -165,7 +190,7 @@ export async function createEntry(db: D1Database, e: NewEntry): Promise<Entry> {
 }
 
 export async function getEntry(db: D1Database, id: number): Promise<Entry | null> {
-  const r = await db.prepare("SELECT * FROM entries WHERE id = ?").bind(id).first<Row>();
+  const r = await db.prepare(`${ENTRIES} WHERE id = ?`).bind(id).first<Row>();
   return r ? entryFromRow(r) : null;
 }
 
@@ -174,7 +199,7 @@ export async function getByCode(db: D1Database, chatId: number, code: string): P
   const m = /^D-?(\d+)$/i.exec(code.trim());
   if (!m) return null;
   const r = await db
-    .prepare("SELECT * FROM entries WHERE id = ? AND chat_id = ?")
+    .prepare(`${ENTRIES} WHERE id = ? AND chat_id = ?`)
     .bind(Number(m[1]), chatId)
     .first<Row>();
   return r ? entryFromRow(r) : null;
@@ -182,7 +207,7 @@ export async function getByCode(db: D1Database, chatId: number, code: string): P
 
 export async function findByCardMessage(db: D1Database, chatId: number, msgId: number): Promise<Entry | null> {
   const r = await db
-    .prepare("SELECT * FROM entries WHERE chat_id = ? AND card_msg_id = ?")
+    .prepare(`${ENTRIES} WHERE chat_id = ? AND card_msg_id = ?`)
     .bind(chatId, msgId)
     .first<Row>();
   return r ? entryFromRow(r) : null;
@@ -190,7 +215,7 @@ export async function findByCardMessage(db: D1Database, chatId: number, msgId: n
 
 export async function entriesInBatch(db: D1Database, batchId: string): Promise<Entry[]> {
   const { results } = await db
-    .prepare("SELECT * FROM entries WHERE batch_id = ? ORDER BY id")
+    .prepare(`${ENTRIES} WHERE batch_id = ? ORDER BY id`)
     .bind(batchId)
     .all<Row>();
   return results.map(entryFromRow);
@@ -360,6 +385,7 @@ export async function deleteAccount(db: D1Database, chatId: number): Promise<boo
   await db.batch([
     db.prepare("DELETE FROM entry_events WHERE entry_id IN (SELECT id FROM entries WHERE chat_id = ?)").bind(chatId),
     db.prepare("DELETE FROM pending_actions WHERE chat_id = ?").bind(chatId),
+    db.prepare("DELETE FROM payment_drafts WHERE chat_id = ?").bind(chatId),
     db.prepare("DELETE FROM entries WHERE chat_id = ?").bind(chatId),
     db.prepare("DELETE FROM broadcast_messages WHERE chat_id = ?").bind(chatId),
     db.prepare("DELETE FROM accounts WHERE chat_id = ?").bind(chatId),
@@ -369,7 +395,7 @@ export async function deleteAccount(db: D1Database, chatId: number): Promise<boo
 
 export async function recent(db: D1Database, chatId: number, limit: number): Promise<Entry[]> {
   const { results } = await db
-    .prepare("SELECT * FROM entries WHERE chat_id = ? ORDER BY id DESC LIMIT ?")
+    .prepare(`${ENTRIES} WHERE chat_id = ? ORDER BY id DESC LIMIT ?`)
     .bind(chatId, limit)
     .all<Row>();
   return results.map(entryFromRow);
@@ -422,12 +448,178 @@ export async function listEntries(db: D1Database, f: EntryFilter): Promise<Entry
     where.push("id < ?");
     values.push(f.before);
   }
-  const sql = `SELECT * FROM entries ${where.length ? `WHERE ${where.join(" AND ")}` : ""} ORDER BY id DESC LIMIT ?`;
+  const sql = `${ENTRIES} ${where.length ? `WHERE ${where.join(" AND ")}` : ""} ORDER BY id DESC LIMIT ?`;
   const { results } = await db
     .prepare(sql)
     .bind(...values, f.limit)
     .all<Row>();
   return results.map(entryFromRow);
+}
+
+// --- banks --------------------------------------------------------------------
+
+export interface Bank extends BankRef {
+  createdAt: string;
+}
+
+export interface BankMove {
+  id: number;
+  bankId: number;
+  amount: Decimal; // signed: a deposit is positive
+  note: string;
+  createdBy: string;
+  createdAt: string;
+}
+
+const bankFromRow = (r: Row): Bank => ({ id: Number(r.id), name: String(r.name), createdAt: String(r.created_at) });
+const moveFromRow = (r: Row): BankMove => ({
+  id: Number(r.id),
+  bankId: Number(r.bank_id),
+  amount: new Decimal(String(r.amount)),
+  note: String(r.note),
+  createdBy: String(r.created_by),
+  createdAt: String(r.created_at),
+});
+
+export async function listBanks(db: D1Database): Promise<Bank[]> {
+  const { results } = await db.prepare("SELECT * FROM banks ORDER BY id").all<Row>();
+  return results.map(bankFromRow);
+}
+
+export async function getBank(db: D1Database, id: number): Promise<Bank | null> {
+  const r = await db.prepare("SELECT * FROM banks WHERE id = ?").bind(id).first<Row>();
+  return r ? bankFromRow(r) : null;
+}
+
+export async function createBank(db: D1Database, name: string, at: string): Promise<Bank> {
+  const res = await db.prepare("INSERT INTO banks (name, created_at) VALUES (?, ?)").bind(name, at).run();
+  return { id: Number(res.meta.last_row_id), name, createdAt: at };
+}
+
+export async function renameBank(db: D1Database, id: number, name: string): Promise<void> {
+  await db.prepare("UPDATE banks SET name = ? WHERE id = ?").bind(name, id).run();
+}
+
+/** Delete a bank and its manual moves; payments that named it stay, without a bank. */
+export async function deleteBank(db: D1Database, id: number): Promise<boolean> {
+  const res = await db.batch([
+    db.prepare("UPDATE entries SET bank_id = NULL WHERE bank_id = ?").bind(id),
+    db.prepare("DELETE FROM bank_moves WHERE bank_id = ?").bind(id),
+    db.prepare("DELETE FROM banks WHERE id = ?").bind(id),
+  ]);
+  return res[2].meta.changes === 1;
+}
+
+export async function addBankMove(
+  db: D1Database,
+  m: { bankId: number; amount: Decimal; note: string; createdBy: string; createdAt: string },
+): Promise<number> {
+  const res = await db
+    .prepare("INSERT INTO bank_moves (bank_id, amount, note, created_by, created_at) VALUES (?, ?, ?, ?, ?)")
+    .bind(m.bankId, m.amount.toFixed(), m.note, m.createdBy, m.createdAt)
+    .run();
+  return Number(res.meta.last_row_id);
+}
+
+export async function deleteBankMove(db: D1Database, bankId: number, moveId: number): Promise<boolean> {
+  const res = await db.prepare("DELETE FROM bank_moves WHERE id = ? AND bank_id = ?").bind(moveId, bankId).run();
+  return res.meta.changes === 1;
+}
+
+export async function listBankMoves(db: D1Database, bankId: number, limit: number): Promise<BankMove[]> {
+  const { results } = await db
+    .prepare("SELECT * FROM bank_moves WHERE bank_id = ? ORDER BY id DESC LIMIT ?")
+    .bind(bankId, limit)
+    .all<Row>();
+  return results.map(moveFromRow);
+}
+
+/** The approved client payments on a bank, newest first. */
+export async function listBankEntries(db: D1Database, bankId: number, limit: number): Promise<Entry[]> {
+  const { results } = await db
+    .prepare(`${ENTRIES} WHERE bank_id = ? AND status = 'approved' ORDER BY id DESC LIMIT ?`)
+    .bind(bankId, limit)
+    .all<Row>();
+  return results.map(entryFromRow);
+}
+
+/** What a payment does to its bank: money received from a client comes in, money paid goes out. */
+export const bankEffect = (t: Trade): Decimal => (t.side === "RECEIVE" ? t.amount : t.amount.neg());
+
+/** Balance per bank id: approved toman payments tagged with it plus its manual moves (summed as Decimal). */
+export async function bankBalances(db: D1Database): Promise<Map<number, Decimal>> {
+  const [entries, moves] = await db.batch<Row>([
+    db.prepare(
+      `SELECT bank_id, kind, amount FROM entries
+       WHERE bank_id IS NOT NULL AND status = 'approved' AND asset = '${TOMAN}' AND kind IN ('PAY','RECEIVE')`,
+    ),
+    db.prepare("SELECT bank_id, amount FROM bank_moves"),
+  ]);
+  const out = new Map<number, Decimal>();
+  const add = (id: number, v: Decimal) => out.set(id, (out.get(id) ?? new Decimal(0)).plus(v));
+  for (const r of entries.results) {
+    const amount = new Decimal(String(r.amount));
+    add(Number(r.bank_id), r.kind === "RECEIVE" ? amount : amount.neg());
+  }
+  for (const r of moves.results) add(Number(r.bank_id), new Decimal(String(r.amount)));
+  return out;
+}
+
+/** Put a toman payment on a bank, or take it off (null). */
+export async function setEntryBank(db: D1Database, id: number, bankId: number | null): Promise<void> {
+  await db.prepare("UPDATE entries SET bank_id = ? WHERE id = ?").bind(bankId, id).run();
+}
+
+/** Set or clear (null) an entry's tracking code / transaction hash. */
+export async function setEntryRef(db: D1Database, id: number, ref: string | null): Promise<void> {
+  await db.prepare("UPDATE entries SET ref = ? WHERE id = ?").bind(ref, id).run();
+}
+
+// --- payment drafts: a payment waiting for its tracking code or hash ----------------
+
+export interface PaymentDraft {
+  id: number;
+  chatId: number;
+  trade: Trade;
+  bankId: number | null;
+  linkedDealId: number | null;
+  rawText: string;
+}
+
+export async function createPaymentDraft(db: D1Database, d: Omit<PaymentDraft, "id">, at: string): Promise<number> {
+  const payload = JSON.stringify({
+    trade: tradeToJson(d.trade), bankId: d.bankId, linkedDealId: d.linkedDealId, rawText: d.rawText,
+  });
+  const res = await db
+    .prepare("INSERT INTO payment_drafts (chat_id, payload_json, created_at) VALUES (?, ?, ?)")
+    .bind(d.chatId, payload, at)
+    .run();
+  return Number(res.meta.last_row_id);
+}
+
+/** Remember the bot's question, so a reply to it can be matched to the draft. */
+export async function setDraftAsk(db: D1Database, id: number, msgId: number): Promise<void> {
+  await db.prepare("UPDATE payment_drafts SET ask_msg_id = ? WHERE id = ?").bind(msgId, id).run();
+}
+
+/** The still-open draft whose question is the given message. */
+export async function findPaymentDraft(db: D1Database, chatId: number, askMsgId: number): Promise<PaymentDraft | null> {
+  const r = await db
+    .prepare("SELECT * FROM payment_drafts WHERE chat_id = ? AND ask_msg_id = ? AND status = 'pending'")
+    .bind(chatId, askMsgId)
+    .first<Row>();
+  if (!r) return null;
+  const p = JSON.parse(String(r.payload_json)) as { trade: string; bankId: number | null; linkedDealId: number | null; rawText: string };
+  return {
+    id: Number(r.id), chatId: Number(r.chat_id), trade: tradeFromJson(p.trade), bankId: p.bankId,
+    linkedDealId: p.linkedDealId, rawText: p.rawText,
+  };
+}
+
+/** Claim a draft (compare-and-set), so two quick replies can't record the payment twice. */
+export async function takePaymentDraft(db: D1Database, id: number): Promise<boolean> {
+  const res = await db.prepare("UPDATE payment_drafts SET status = 'used' WHERE id = ? AND status = 'pending'").bind(id).run();
+  return res.meta.changes === 1;
 }
 
 // --- accounts -----------------------------------------------------------------
@@ -800,7 +992,7 @@ export async function takePendingAction(
 /** The pending or approved entry that holds this transaction, if any. */
 export async function findActiveByTx(db: D1Database, network: Network, hash: string): Promise<Entry | null> {
   const r = await db
-    .prepare("SELECT * FROM entries WHERE tx_network = ? AND tx_hash = ? AND status IN ('pending','approved')")
+    .prepare(`${ENTRIES} WHERE tx_network = ? AND tx_hash = ? AND status IN ('pending','approved')`)
     .bind(network, hash)
     .first<Row>();
   return r ? entryFromRow(r) : null;

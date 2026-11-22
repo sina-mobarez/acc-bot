@@ -15,7 +15,7 @@ import {
   type Entry,
 } from "../src/db";
 import { handleMessage } from "../src/handlers/message";
-import { BUSY_TEXT, CLIENT_WRITE_REFUSALS, GOUGING_LINES, gougingLine, ORDINARY_LINES, pick } from "../src/jokes";
+import { BUSY_TEXT, CLIENT_WRITE_REFUSALS, pick } from "../src/jokes";
 import { summarize } from "../src/ledger";
 import type { NluOutput } from "../src/nlu";
 import { TgError } from "../src/telegram";
@@ -84,7 +84,7 @@ describe("fast path", () => {
     expect(e.trade.side).toBe("BUY");
     expect(e.trade.amount.eq(1000)).toBe(true);
     expect(e.createdBy).toBe("@sina");
-    expect(e.joke).toBe(pick(ORDINARY_LINES, m.message_id));
+    expect(e.joke).toBeNull(); // cards carry no joke
     const call = sent(a)[0].params;
     expect(call.chat_id).toBe(chat.id);
     expect(call.parse_mode).toBe("HTML");
@@ -95,33 +95,102 @@ describe("fast path", () => {
     expect(a.nlu.inputs).toHaveLength(0); // no deviation, no Gemini call
   });
 
-  test("# payment creates pending payment card", async () => {
+  test("# payment with its tracking code creates a pending payment card", async () => {
     const chat = freshGroup();
     const a = app();
-    const m = msg(chat, ADMIN, "#دریافت ۵۰ میلیون تومن");
+    const m = msg(chat, ADMIN, "#دریافت ۵۰ میلیون تومن کارت به کارت پیگیری ۱۲۳۴۵۶");
     await handleMessage(a, m, m.text!);
     const [e] = await recent(db, chat.id, 5);
     expect(e.trade.side).toBe("RECEIVE");
     expect(e.trade.asset).toBe("IRT");
     expect(e.trade.amount.eq(50_000_000)).toBe(true);
+    expect(e.ref).toBe("123456");
+    expect(e.trade.note).toBe("کارت به کارت");
+    expect(lastText(a)).toContain("<code>123456</code>");
     expect(lastButtons(a)).toContain(`ok:${e.id}`);
   });
 
-  test("# trade with 5% deviation asks nlu for a joke; card has no Nobitex line", async () => {
+  test("a payment without its code is not saved: the bot asks, and the admin's reply records it", async () => {
     const chat = freshGroup();
-    const a = app(nlu({ intent: "create_trade", joke: "گرون <b>فروشی</b>" }));
+    const a = app();
+    const m = msg(chat, ADMIN, "#دریافت ۵۰ میلیون تومن");
+    await handleMessage(a, m, m.text!);
+    expect(await recent(db, chat.id, 5)).toHaveLength(0);
+    expect(lastText(a)).toContain("کد پیگیری");
+    expect(lastButtons(a)).toEqual([]);
+    const askId = a.tg.calls.filter((c) => c.method === "sendMessage").length; // FakeTg ids count from 1
+    const ask = { message_id: askId, from: BOT, chat, date: 0, text: "?" };
+
+    // Not a code: still nothing saved. A client's reply is not an answer either.
+    const bad = msg(chat, ADMIN, "بعداً می‌فرستم", { reply_to_message: ask });
+    await handleMessage(a, bad, bad.text!);
+    expect(await recent(db, chat.id, 5)).toHaveLength(0);
+
+    const r = msg(chat, ADMIN, "۹۸۷۶۵۴", { reply_to_message: ask });
+    await handleMessage(a, r, r.text!);
+    await a.flush();
+    const [e] = await recent(db, chat.id, 5);
+    expect(e.status).toBe("pending");
+    expect(e.ref).toBe("987654");
+    expect(e.trade.amount.eq(50_000_000)).toBe(true);
+    expect(lastButtons(a)).toContain(`ok:${e.id}`);
+    expect(a.tg.calls.some((c) => c.method === "deleteMessage" && c.params.message_id === askId)).toBe(true);
+    expect(a.nlu.inputs).toHaveLength(0);
+
+    // The same question can't be answered twice.
+    const again = msg(chat, ADMIN, "111222", { reply_to_message: ask });
+    await handleMessage(a, again, again.text!);
+    expect((await recent(db, chat.id, 5)).filter((x) => x.ref !== null)).toHaveLength(1);
+  });
+
+  test("a USDT payment needs a transaction hash; the NLU's ref field is cleaned", async () => {
+    const chat = freshGroup();
+    const none = app(nlu({ intent: "record_payment", direction: "PAY", amount_text: "۱۰۰", asset: "تتر" }));
+    const m1 = msg(chat, ADMIN, "صد تتر فرستادم");
+    await handleMessage(none, m1, m1.text!);
+    expect(lastText(none)).toContain("هش تراکنش");
+    expect(await recent(db, chat.id, 5)).toHaveLength(0);
+
+    const a = app(nlu({ intent: "record_payment", direction: "RECEIVE", amount_text: "۵ میلیون", ref: "کد پیگیری ۴۴۵۵۶۶" }));
+    const m2 = msg(chat, ADMIN, "۵ میلیون گرفتم کد پیگیری ۴۴۵۵۶۶");
+    await handleMessage(a, m2, m2.text!);
+    expect((await recent(db, chat.id, 5))[0].ref).toBe("445566");
+  });
+
+  test("a payment written as a reply to an approved deal's card is linked to that deal", async () => {
+    const chat = freshGroup();
+    const deal = await approved(chat.id, trade());
+    await setCardMessage(db, deal.id, 4242);
+    const a = app(nlu({ intent: "record_payment", direction: "RECEIVE", amount_text: "۱۰۰", asset: "تتر", ref: "abc12345" }));
+    const m = msg(chat, ADMIN, "صد تتر گرفتم", { reply_to_message: { message_id: 4242, from: BOT, chat, date: 0, text: "card" } });
+    await handleMessage(a, m, m.text!);
+    const [e] = await recent(db, chat.id, 1);
+    expect(e.linkedDealId).toBe(deal.id);
+    expect(lastText(a)).toContain(deal.code);
+  });
+
+  test("«کد پیگیری …» on a payment's card saves it and redraws the card", async () => {
+    const chat = freshGroup();
+    const p = await approved(chat.id, trade({ side: "RECEIVE", amount: D(1000000), asset: "IRT", rate: null }));
+    await setCardMessage(db, p.id, 4343);
+    const a = app(nlu({ intent: "set_reference", ref: "۷۷۸۸۹۹" }));
+    const m = msg(chat, ADMIN, "کد پیگیری ۷۷۸۸۹۹", { reply_to_message: { message_id: 4343, from: BOT, chat, date: 0, text: "card" } });
+    await handleMessage(a, m, m.text!);
+    expect((await getEntry(db, p.id))!.ref).toBe("778899");
+    const redraw = a.tg.calls.find((c) => c.method === "editMessageText")!;
+    expect(redraw.params.message_id).toBe(4343);
+    expect(String(redraw.params.text)).toContain("<code>778899</code>");
+  });
+
+  test("a # trade far from Nobitex makes no Gemini call and gets a plain card", async () => {
+    const chat = freshGroup();
+    const a = app(nlu({ intent: "create_trade", joke: "گرون فروشی" }));
     const m = msg(chat, ADMIN, "#فروش ۱۰۰ تتر ۲۷۹۳۰۰");
     await handleMessage(a, m, m.text!);
-
-    expect(a.nlu.inputs).toHaveLength(1);
-    expect(a.nlu.inputs[0].deviationPct).toBe("3");
-    expect(a.nlu.inputs[0].usdtToman).toBe("266000");
-    const text = lastText(a);
-    expect(text).not.toContain("نوبیتکس");
-    expect(text).not.toContain("+۵٪");
-    expect(text).toContain("گرون &lt;b&gt;فروشی&lt;/b&gt;");
-    const [e] = await recent(db, chat.id, 5);
-    expect(e.joke).toBe("گرون <b>فروشی</b>");
+    expect(a.nlu.inputs).toHaveLength(0);
+    expect(lastText(a)).not.toContain("نوبیتکس");
+    expect(lastText(a)).not.toContain("گرون");
+    expect((await recent(db, chat.id, 5))[0].joke).toBeNull();
   });
 
   test("deviation threshold comes from the deviation_pct setting", async () => {
@@ -226,48 +295,16 @@ describe("refusals and fallbacks", () => {
     expect(typing[0].params).toMatchObject({ chat_id: chat.id, action: "typing" });
   });
 
-  test("gemini failure falls back: deviated # trade still gets a card with a gouging line", async () => {
+  test("NL trade: Gemini's joke never reaches the card", async () => {
     const chat = freshGroup();
-    const a = app(nlu(null));
-    const m = msg(chat, ADMIN, "#فروش ۱۰۰ تتر ۲۷۹۳۰۰");
-    await handleMessage(a, m, m.text!);
-    expect(a.nlu.inputs).toHaveLength(1);
-    const [e] = await recent(db, chat.id, 5);
-    expect(e.status).toBe("pending");
-    expect(e.joke).toBe(gougingLine(m.message_id, D(266000), D(279300)));
-    expect(lastButtons(a)).toContain(`ok:${e.id}`);
-  });
-
-  test("NL trade with deviation and empty joke gets a gouging line", async () => {
-    const chat = freshGroup();
-    const a = app(nlu({ intent: "create_trade", side: "SELL", amount_text: "۱۰۰", asset: "تتر", rate_text: "۲۷۹۳۰۰" }));
+    const a = app(nlu({ intent: "create_trade", side: "SELL", amount_text: "۱۰۰", asset: "تتر", rate_text: "۲۷۹۳۰۰", joke: "گرون <i>فروشی</i>" }));
     const m = msg(chat, ADMIN, "صد تا تتر فروختم ۲۷۹۳۰۰");
     await handleMessage(a, m, m.text!);
     const [e] = await recent(db, chat.id, 5);
     expect(e.status).toBe("pending");
-    expect(GOUGING_LINES.length).toBeGreaterThanOrEqual(6);
-    expect(e.joke).toBe(gougingLine(m.message_id, D(266000), D(279300)));
-    expect(lastText(a)).toContain("۲۶۶,۰۰۰");
-    expect(e.joke).toContain("۲۶۶,۰۰۰");
-  });
-
-  test("NL SELL far below Nobitex is teased too", async () => {
-    const chat = freshGroup();
-    const a = app(nlu({ intent: "create_trade", side: "SELL", amount_text: "۱۰۰", asset: "تتر", rate_text: "۲۵۰۰۰۰" }));
-    const m = msg(chat, ADMIN, "صد تا تتر فروختم ۲۵۰۰۰۰");
-    await handleMessage(a, m, m.text!);
-    const [e] = await recent(db, chat.id, 5);
-    expect(ORDINARY_LINES).not.toContain(e.joke);
-    expect(e.joke).toContain("۲۶۶,۰۰۰");
-  });
-
-  test("NL trade without deviation and empty joke gets an ordinary line", async () => {
-    const chat = freshGroup();
-    const a = app(nlu({ intent: "create_trade", side: "BUY", amount_text: "۱۰۰", asset: "تتر", rate_text: "۲۶۶۰۰۰" }));
-    const m = msg(chat, ADMIN, "صد تا تتر خریدم ۲۶۶۰۰۰");
-    await handleMessage(a, m, m.text!);
-    const [e] = await recent(db, chat.id, 5);
-    expect(e.joke).toBe(pick(ORDINARY_LINES, m.message_id));
+    expect(e.joke).toBeNull();
+    expect(lastText(a)).not.toContain("فروشی");
+    expect(lastText(a).split("\n")).toHaveLength(3);
   });
 
   test("NL trade with humor off gets no joke", async () => {
@@ -279,16 +316,6 @@ describe("refusals and fallbacks", () => {
     await handleMessage(a, m, m.text!);
     const [e] = await recent(db, chat.id, 5);
     expect(e.joke).toBeNull();
-  });
-
-  test("NL trade keeps Gemini's joke verbatim, escaped on the card", async () => {
-    const chat = freshGroup();
-    const a = app(nlu({ intent: "create_trade", side: "SELL", amount_text: "۱۰۰", asset: "تتر", rate_text: "۲۷۹۳۰۰", joke: "گرون <i>فروشی</i>" }));
-    const m = msg(chat, ADMIN, "صد تا تتر فروختم ۲۷۹۳۰۰");
-    await handleMessage(a, m, m.text!);
-    const [e] = await recent(db, chat.id, 5);
-    expect(e.joke).toBe("گرون <i>فروشی</i>");
-    expect(lastText(a)).toContain("گرون &lt;i&gt;فروشی&lt;/i&gt;");
   });
 
   test("bare mention gets a hint without calling Gemini", async () => {

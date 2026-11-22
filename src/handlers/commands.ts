@@ -1,8 +1,9 @@
 import type { Message } from "@grammyjs/types";
 import type { App } from "../app";
 import { onBroadcastCommand, onCancelCommand, onGroupsCommand } from "../broadcast";
-import { renderBalance, renderList } from "../cards";
-import { accountName, approvedLedger, getAccount, getSetting, isAdmin, recent } from "../db";
+import Decimal from "decimal.js";
+import { renderBalance, renderBanks, renderList } from "../cards";
+import { accountName, approvedLedger, bankBalances, getAccount, getSetting, isAdmin, listBanks, recent } from "../db";
 import { summarize } from "../ledger";
 import { normalize } from "../money";
 import { botInfo } from "./update";
@@ -12,12 +13,13 @@ const HELP =
   "در گروه مشتری، ربات را تگ کنید یا روی پیام ربات ریپلای بزنید و ساده بنویسید:\n" +
   "<code>@ربات ۱۰۰ تتر خریدیم به قیمت ۲۷۵ هزار</code>\n" +
   "<code>@ربات فروختیم ۵۰۰ میلیون تومن تتر ۲۶۵ هزار</code> — مبلغ تومانی: مقدار تتر = مبلغ ÷ قیمت\n" +
-  "<code>@ربات ۵۰ میلیون تومن کارت به کارت دریافت کردیم</code>\n" +
+  "<code>@ربات ۵۰ میلیون تومن دریافت شد به سامان، پیگیری ۱۲۳۴۵۶</code>\n" +
+  "پرداخت و دریافت بدون کد پیگیری (تومان) یا هش تراکنش (کریپتو) ثبت نمی‌شود؛ اگر ننویسید ربات می‌پرسد.\n" +
   "<code>@ربات تسویه کن</code> — تسویه معامله با پرداخت‌های ثبت‌شده\n" +
   "<code>@ربات مانده حساب چنده؟</code> / <code>@ربات قیمت تتر چنده؟</code>\n\n" +
   "روش قدیمی هم کار می‌کند؛ پیام با # شروع شود:\n" +
   "<code>#خرید ۱۰۰ تتر رو قیمت ۲۷۵۰۰۰</code>\n" +
-  "<code>#دریافت ۵۰ میلیون تومن</code>\n\n" +
+  "<code>#دریافت ۵۰ میلیون تومن پیگیری ۱۲۳۴۵۶</code>\n\n" +
   "ربات یک کارت می‌فرستد؛ با ✅ تایید، معامله در حساب ثبت می‌شود.\n" +
   "مشتری‌ها هم می‌توانند مانده حساب و قیمت‌ها را بپرسند.\n\n" +
   "/deals — لیست معاملات این گروه (مثلاً <code>/deals 30</code>)\n" +
@@ -25,6 +27,7 @@ const HELP =
   "/id — شناسه تلگرام شما\n\n" +
   "در چت خصوصی با ربات (فقط مدیران):\n" +
   "/app — پنل مدیریت\n" +
+  "/banks — موجودی بانک‌ها («واریز ۵۰ میلیون به سامان» / «برداشت ۲۰ میلیون از سامان»)\n" +
   "/broadcast — ارسال پیام به همه گروه‌ها\n" +
   "/groups — لیست گروه‌های ربات\n" +
   "/cancel — انصراف از ارسال همگانی";
@@ -81,6 +84,12 @@ export async function handleCommand(app: App, msg: Message): Promise<void> {
       if (!origin) return reply(app, msg, "هنوز راه‌اندازی (setup) انجام نشده است.");
       const url = `${origin.replace(/\/+$/, "")}/app/`;
       return reply(app, msg, "پنل مدیریت:", { inline_keyboard: [[{ text: "پنل مدیریت", web_app: { url } }]] });
+    }
+    case "banks": {
+      // Our own bank balances: admins, private chat only; silent anywhere else.
+      if (!isPrivate || !msg.from || !(await isAdmin(app.db, app.adminIds, msg.from.id))) return;
+      const [banks, balances] = await Promise.all([listBanks(app.db), bankBalances(app.db)]);
+      return reply(app, msg, renderBanks(banks.map((b) => ({ name: b.name, balance: balances.get(b.id) ?? new Decimal(0) }))));
     }
     case "broadcast":
       return isPrivate ? onBroadcastCommand(app, msg) : undefined;

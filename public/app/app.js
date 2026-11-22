@@ -110,6 +110,8 @@ function closeModal() { $("modal").hidden = true; $("modal").replaceChildren(); 
 let tab = "dash";
 let clientId = null; // detail view when non-null
 let names = new Map(); // chatId -> name
+let bankId = null; // bank detail view when non-null
+let banks = []; // our own bank accounts: { id, name, balance }
 const dealsState = { status: "", kind: "", chatId: "", entries: [], more: false };
 
 async function loadNames() {
@@ -118,6 +120,17 @@ async function loadNames() {
   return d.accounts;
 }
 const clientName = (id) => names.get(id) ?? String(id);
+
+async function loadBanks() {
+  const d = await api("GET", "/api/banks");
+  banks = d.banks;
+  return d;
+}
+/** A signed toman amount, coloured: money in is green, money out is red. */
+const signed = (v) => h("span", { class: v.startsWith("-") ? "red" : "green" }, `${v.startsWith("-") ? "−" : "+"}${fmt(v.replace(/^-/, ""))}`);
+/** «بدون بانک» plus one option per bank. */
+const bankSelect = (current) => h("select", {}, h("option", { value: "" }, "بدون بانک"),
+  banks.map((b) => h("option", { value: b.id, selected: b.id === current }, b.name)));
 
 function owedLines(owed) {
   const keys = Object.keys(owed ?? {});
@@ -186,7 +199,7 @@ function openClient(id) { clientId = id; tab = "clients"; markTab(); showClient(
 
 async function showClient() {
   loading();
-  const d = await attempt(() => api("GET", `/api/accounts/${clientId}`));
+  const [d] = await Promise.all([attempt(() => api("GET", `/api/accounts/${clientId}`)), loadBanks().catch(() => {})]);
   if (!d) return render("مشتری", backBtn(), h("div", { class: "empty" }, "بارگذاری نشد."));
   const a = d.account;
   const patch = async (body) => {
@@ -233,7 +246,7 @@ async function showClient() {
 }
 
 function backBtn() {
-  return h("button", { class: "back", onclick: () => { clientId = null; showTab(); } }, "‹ بازگشت");
+  return h("button", { class: "back", onclick: () => { clientId = null; bankId = null; showTab(); } }, "‹ بازگشت");
 }
 
 function renameModal(a, patch) {
@@ -251,19 +264,25 @@ function paymentForm(d) {
   const note = h("input", { placeholder: "اختیاری" });
   const deal = h("select", {}, h("option", { value: "" }, "بدون ارتباط با معامله"),
     d.openDeals.map((x) => h("option", { value: x.id }, x.code)));
+  const bank = bankSelect(null);
+  const ref = h("input", { dir: "ltr", placeholder: "الزامی" });
   const btn = h("button", { class: "btn", onclick: async () => {
     btn.disabled = true;
-    const body = { direction: dir.value, amount: amount.value, note: note.value };
+    const body = { direction: dir.value, amount: amount.value, note: note.value, ref: ref.value.trim() };
     if (asset.value.trim()) body.asset = asset.value.trim();
     if (deal.value) body.linkedDealId = Number(deal.value);
+    if (bank.value) body.bankId = Number(bank.value);
     const r = await attempt(() => api("POST", `/api/accounts/${clientId}/payments`, body));
     btn.disabled = false;
     if (r) { toast("ثبت شد."); showClient(); }
   } }, "ثبت");
   return h("div", { class: "card" },
     h("label", { class: "f" }, "جهت", dir), h("label", { class: "f" }, "مبلغ", amount),
-    h("label", { class: "f" }, "دارایی", asset), h("label", { class: "f" }, "توضیحات", note),
-    h("label", { class: "f" }, "معامله‌ی مرتبط", deal), btn);
+    h("label", { class: "f" }, "دارایی", asset),
+    h("label", { class: "f" }, "کد پیگیری (تومان) / هش تراکنش (کریپتو)", ref),
+    h("label", { class: "f" }, "توضیحات", note),
+    h("label", { class: "f" }, "معامله‌ی مرتبط", deal),
+    banks.length ? h("label", { class: "f" }, "بانک (فقط پرداخت تومانی)", bank) : null, btn);
 }
 
 // --- deals -----------------------------------------------------------------------------
@@ -271,7 +290,8 @@ function paymentForm(d) {
 function dealRow(e, { client, refresh }) {
   const isPay = e.kind === "PAY" || e.kind === "RECEIVE";
   const title = `${KIND[e.kind] ?? e.kind} ${money(e.amount, e.asset)}`;
-  const sub = [e.code, client ? clientName(e.chatId) : null, e.rate ? `فی ${fmt(e.rate)}` : null, e.note || null]
+  const sub = [e.code, client ? clientName(e.chatId) : null, e.rate ? `فی ${fmt(e.rate)}` : null,
+    e.bankName ? `🏦 ${e.bankName}` : null, e.ref ? `🔖 ${e.ref}` : null, e.note || null]
     .filter(Boolean).join(" · ");
   const act = (label, cls, fn) => h("button", { class: `btn sm ${cls}`, onclick: async (ev) => {
     ev.target.disabled = true;
@@ -285,7 +305,10 @@ function dealRow(e, { client, refresh }) {
     actions.push(act("رد", "ghost", () => post(`/api/entries/${e.id}/reject`)));
   }
   if (e.status === "pending" || e.status === "approved") {
-    actions.push(act("ویرایش", "ghost", async () => editModal(e, isPay, refresh)));
+    actions.push(act("ویرایش", "ghost", async () => {
+      if (isPay && e.asset === "IRT") await loadBanks().catch(() => {});
+      editModal(e, isPay, refresh);
+    }));
     actions.push(act("لغو", "danger", async () => {
       if (await confirmAsk(`«${e.code}» لغو شود؟`)) await post(`/api/entries/${e.id}/cancel`, "لغو شد.");
     }));
@@ -306,8 +329,12 @@ function editModal(e, isPay, refresh) {
   const amount = h("input", { inputmode: "decimal", value: e.amount });
   const rate = h("input", { inputmode: "decimal", value: e.rate ?? "" });
   const note = h("input", { value: e.note ?? "" });
+  const bank = isPay && e.asset === "IRT" && banks.length ? bankSelect(e.bankId) : null;
+  const ref = h("input", { dir: "ltr", value: e.ref ?? "" });
   const save = h("button", { class: "btn", onclick: async () => {
     const body = {};
+    if (ref.value.trim() && ref.value.trim() !== (e.ref ?? "")) body.ref = ref.value.trim();
+    if (bank && bank.value !== String(e.bankId ?? "")) body.bankId = bank.value ? Number(bank.value) : null;
     if (amount.value.trim() !== e.amount) body.amount = amount.value.trim();
     if (!isPay && rate.value.trim() !== (e.rate ?? "")) body.rate = rate.value.trim();
     if (note.value.trim() !== (e.note ?? "")) body.note = note.value.trim();
@@ -321,6 +348,8 @@ function editModal(e, isPay, refresh) {
     h("label", { class: "f" }, `مبلغ (${assetName(e.asset)})`, amount),
     isPay ? null : h("label", { class: "f" }, "قیمت", rate),
     h("label", { class: "f" }, "توضیحات", note),
+    e.txHash ? null : h("label", { class: "f" }, isPay && e.asset !== "IRT" ? "هش تراکنش" : "کد پیگیری", ref),
+    bank ? h("label", { class: "f" }, "بانک", bank) : null,
     h("div", { class: "btns" }, save, h("button", { class: "btn ghost", onclick: closeModal }, "انصراف"))));
 }
 
@@ -363,6 +392,84 @@ function drawDeals() {
       ev.target.disabled = true;
       if (await fetchDeals(true)) drawDeals(); else ev.target.disabled = false;
     } }, "بیشتر") : null);
+}
+
+// --- banks ------------------------------------------------------------------------------
+
+async function showBanks() {
+  if (bankId !== null) return showBank();
+  loading();
+  const d = await attempt(loadBanks);
+  if (!d) return render("بانک‌ها", h("div", { class: "empty" }, "بارگذاری نشد."));
+  const name = h("input", { placeholder: "مثلاً سامان" });
+  render("بانک‌ها",
+    h("div", { class: "card" }, h("div", { class: "muted" }, "جمع موجودی"),
+      h("div", { class: `v ${d.total.startsWith("-") ? "red" : ""}`, style: "font-weight:700;font-size:18px" }, money(d.total, "IRT"))),
+    d.banks.length
+      ? h("div", { class: "list" }, d.banks.map((b) =>
+          h("div", { class: "row tap", onclick: () => { bankId = b.id; showBank(); } },
+            h("span", { class: "grow" }, `🏦 ${b.name}`),
+            h("span", { class: `nums ${b.balance.startsWith("-") ? "red" : ""}` }, money(b.balance, "IRT")))))
+      : h("div", { class: "empty" }, "هنوز بانکی تعریف نشده است."),
+    h("h3", {}, "افزودن بانک"),
+    h("div", { class: "card" }, h("label", { class: "f" }, "نام بانک", name),
+      h("button", { class: "btn", onclick: async () => {
+        if (await attempt(() => api("POST", "/api/banks", { name: name.value.trim() }))) { toast("اضافه شد."); showBanks(); }
+      } }, "افزودن"),
+      h("div", { class: "muted", style: "margin-top:8px" },
+        "در گروه مشتری: «۵۰ میلیون تومن دریافت شد به سامان». در چت خصوصی ربات: «واریز ۵۰ میلیون به سامان» یا «برداشت ۲۰ میلیون از سامان».")));
+}
+
+async function showBank() {
+  loading();
+  if (!names.size) await attempt(loadNames);
+  const d = await attempt(() => api("GET", `/api/banks/${bankId}`));
+  if (!d) return render("بانک", backBtn(), h("div", { class: "empty" }, "بارگذاری نشد."));
+  const b = d.bank;
+  const dir = h("select", {}, h("option", { value: "in" }, "واریز (افزایش موجودی)"), h("option", { value: "out" }, "برداشت (کاهش موجودی)"));
+  const amount = h("input", { inputmode: "decimal", placeholder: "مثلاً ۵۰ میلیون" });
+  const note = h("input", { placeholder: "اختیاری؛ مثلاً موجودی اولیه، کارمزد" });
+  const add = h("button", { class: "btn", onclick: async () => {
+    add.disabled = true;
+    const r = await attempt(() => api("POST", `/api/banks/${bankId}/moves`, { direction: dir.value, amount: amount.value, note: note.value }));
+    add.disabled = false;
+    if (r) { toast("ثبت شد."); showBank(); }
+  } }, "ثبت");
+  const item = (x) => h("div", { class: "row" },
+    h("div", { class: "grow" },
+      h("div", {}, x.type === "entry" ? `${x.code} · ${clientName(x.chatId)}` : "ثبت دستی"),
+      h("div", { class: "muted" }, [x.note || null, x.by, jdate(x.at)].filter(Boolean).join(" · ")),
+      x.type === "move" ? h("div", { class: "actions" }, h("button", { class: "btn sm danger", onclick: async () => {
+        if (!(await confirmAsk("این مورد حذف شود؟ موجودی بانک برمی‌گردد."))) return;
+        if (await attempt(() => api("DELETE", `/api/banks/${bankId}/moves/${x.id}`))) { toast("حذف شد."); showBank(); }
+      } }, "🗑 حذف")) : null),
+    h("span", { class: "nums" }, signed(x.amount)));
+  render(`🏦 ${b.name}`,
+    backBtn(),
+    h("div", { class: "card" }, h("div", { class: "muted" }, "موجودی"),
+      h("div", { class: b.balance.startsWith("-") ? "red" : "", style: "font-weight:700;font-size:18px" }, money(b.balance, "IRT"))),
+    h("h3", {}, "واریز / برداشت دستی"),
+    h("div", { class: "card" }, h("label", { class: "f" }, "نوع", dir), h("label", { class: "f" }, "مبلغ (تومان)", amount),
+      h("label", { class: "f" }, "توضیحات", note), add),
+    h("h3", {}, "گردش حساب"),
+    d.items.length ? h("div", { class: "list" }, d.items.map(item)) : h("div", { class: "empty" }, "گردشی ثبت نشده است."),
+    h("div", { style: "height:16px" }),
+    h("div", { class: "sheet-btns", style: "display:flex;gap:8px" },
+      h("button", { class: "btn ghost", style: "flex:1", onclick: () => {
+        const input = h("input", { value: b.name });
+        openModal("تغییر نام بانک", h("div", {}, h("label", { class: "f" }, "نام بانک", input),
+          h("div", { class: "btns" },
+            h("button", { class: "btn", onclick: async () => {
+              if (await attempt(() => api("PATCH", `/api/banks/${bankId}`, { name: input.value.trim() }))) { closeModal(); showBank(); }
+            } }, "ذخیره"),
+            h("button", { class: "btn ghost", onclick: closeModal }, "انصراف"))));
+      } }, "تغییر نام"),
+      h("button", { class: "btn danger", style: "flex:1", onclick: async (ev) => {
+        if (!(await confirmDelete("این بانک و گردش دستی آن"))) return;
+        ev.target.disabled = true;
+        if (await attempt(() => api("DELETE", `/api/banks/${bankId}`))) { toast("حذف شد."); bankId = null; showTab(); }
+        else ev.target.disabled = false;
+      } }, "🗑 حذف بانک")));
 }
 
 // --- settings ---------------------------------------------------------------------------
@@ -410,13 +517,13 @@ async function showSettings() {
 
 // --- tabs --------------------------------------------------------------------------------
 
-const TABS = { dash: showDash, clients: showClients, deals: showDeals, settings: showSettings };
+const TABS = { dash: showDash, clients: showClients, deals: showDeals, banks: showBanks, settings: showSettings };
 function markTab() { for (const b of document.querySelectorAll("#tabs button")) b.classList.toggle("on", b.dataset.tab === tab); }
 function showTab() { markTab(); closeModal(); return TABS[tab](); }
 $("tabs").addEventListener("click", (ev) => {
   const t = ev.target.closest("button")?.dataset.tab;
   if (!t) return;
-  tab = t; clientId = null; showTab();
+  tab = t; clientId = null; bankId = null; showTab();
 });
 
 showTab();

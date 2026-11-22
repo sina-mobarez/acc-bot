@@ -27,7 +27,7 @@ const authorized = (req: Request, env: Env): boolean =>
   !!env.WEBHOOK_SECRET && req.headers.get("X-Telegram-Bot-Api-Secret-Token") === env.WEBHOOK_SECRET;
 
 const GROUP_COMMANDS = ["deals", "balance", "help", "id"];
-const PRIVATE_COMMANDS = ["app", "broadcast", "groups", "cancel", "help", "id"];
+const PRIVATE_COMMANDS = ["app", "banks", "broadcast", "groups", "cancel", "help", "id"];
 
 const DESCRIPTIONS: Record<string, string> = {
   deals: "آخرین معاملات",
@@ -35,6 +35,7 @@ const DESCRIPTIONS: Record<string, string> = {
   help: "راهنما",
   id: "نمایش شناسه",
   app: "پنل مدیریت",
+  banks: "موجودی بانک‌ها",
   broadcast: "ارسال پیام همگانی",
   groups: "فهرست گروه‌ها",
   cancel: "لغو عملیات",

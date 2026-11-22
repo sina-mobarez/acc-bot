@@ -6,14 +6,16 @@ import type { Trade } from "./trade";
 
 export type Action =
   | { kind: "create"; trade: Trade }
-  | { kind: "payment"; trade: Trade }
-  | { kind: "settle"; dealCode: string }
+  | { kind: "payment"; trade: Trade; bankHint?: string; ref?: string }
+  | { kind: "ref"; dealCode: string; ref: string }
+  | { kind: "settle"; dealCode: string; bankHint?: string }
   | { kind: "edit"; dealCode: string; changes: { amount?: Decimal; rate?: Decimal; note?: string } }
   | { kind: "cancel"; dealCode: string }
   | { kind: "balance"; clientHint?: string }
   | { kind: "remaining"; dealCode?: string; clientHint?: string }
   | { kind: "deals"; clientHint?: string }
   | { kind: "price"; coins: string[] }
+  | { kind: "banks" }
   | { kind: "reply"; text: string }
   | { kind: "refuse" };
 
@@ -30,6 +32,8 @@ const ASK_SIDE = "خرید بود یا فروش؟";
 const ASK_DIRECTION = "پرداخت بود یا دریافت؟";
 const ASK_DEAL = "کدوم معامله؟ کدش رو بگو، مثلاً D-00012.";
 const ASK_CHANGE = "چی رو تغییر بدم؟ مبلغ، قیمت یا توضیح؟";
+const ASK_REF = "کد پیگیری یا هش تراکنش رو متوجه نشدم. دوباره بفرست.";
+const ASK_REF_TARGET = "برای کدوم پرداخت؟ روی کارتش ریپلای کن یا کدش رو بگو، مثلاً D-00012.";
 const UNCLEAR = "متوجه نشدم، یه بار دیگه واضح‌تر بگو.";
 
 const reply = (text: string): Action => ({ kind: "reply", text });
@@ -46,7 +50,7 @@ export function deviationPct(rate: Decimal, ref: Decimal): Decimal {
   return rate.minus(ref).div(ref).mul(100).toDecimalPlaces(1, Decimal.ROUND_HALF_UP);
 }
 
-const WRITES = new Set(["create_trade", "record_payment", "settle_deal", "edit_deal", "cancel_deal"]);
+const WRITES = new Set(["create_trade", "record_payment", "settle_deal", "edit_deal", "cancel_deal", "set_reference"]);
 
 function positive(text: string | undefined): Decimal | null {
   if (text === undefined) return null;
@@ -92,10 +96,17 @@ export function toAction(o: NluOutput, ctx: IntentCtx): Action {
       return {
         kind: "payment",
         trade: { side: o.direction, amount, asset, rate: null, note: o.note?.trim() ?? "", tomanTotal: null },
+        bankHint: o.bank?.trim() || undefined,
+        ref: o.ref?.trim() || undefined,
       };
     }
     case "settle_deal":
-      return o.deal_code ? { kind: "settle", dealCode: o.deal_code } : reply(ASK_DEAL);
+      return o.deal_code
+        ? { kind: "settle", dealCode: o.deal_code, bankHint: o.bank?.trim() || undefined }
+        : reply(ASK_DEAL);
+    case "set_reference":
+      if (!o.ref?.trim()) return reply(ASK_REF);
+      return o.deal_code ? { kind: "ref", dealCode: o.deal_code, ref: o.ref.trim() } : reply(ASK_REF_TARGET);
     case "cancel_deal":
       return o.deal_code ? { kind: "cancel", dealCode: o.deal_code } : reply(ASK_DEAL);
     case "edit_deal": {
@@ -123,6 +134,9 @@ export function toAction(o: NluOutput, ctx: IntentCtx): Action {
       return { kind: "deals", clientHint: ctx.role === "admin" ? o.client_hint : undefined };
     case "query_price":
       return { kind: "price", coins: o.coins ?? [] };
+    case "query_banks":
+      // Our own bank balances are for admins only; a client gets the same answer as for gibberish.
+      return ctx.role === "admin" ? { kind: "banks" } : reply(UNCLEAR);
     case "chitchat":
     case "unclear":
       return reply(o.reply?.trim() || UNCLEAR);

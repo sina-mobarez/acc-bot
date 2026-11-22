@@ -51,6 +51,8 @@ const entry = (over: Partial<Entry> = {}): Entry => ({
   cancelledBy: null,
   cancelledAt: null,
   tx: null,
+  bank: null,
+  ref: null,
   ...over,
 });
 
@@ -61,9 +63,37 @@ describe("jalali", () => {
 });
 
 describe("renderEntry", () => {
-  it("shows the toman breakdown for a by-toman trade", () => {
+  it("a deal is three lines: headline with its code, price and total, status", () => {
+    expect(renderEntry(entry()).split("\n")).toEqual([
+      "🟢 <b>خرید ۱,۰۰۰ تتر</b> · <code>D-00007</code>",
+      "💵 <b>قیمت:</b> ۲۶۶,۰۰۰ · <b>جمع:</b> ۲۶۶,۰۰۰,۰۰۰ تومان",
+      "⏳ <b>در انتظار تایید</b>",
+    ]);
+  });
+
+  it("a by-toman trade keeps its exact toman total", () => {
     const t = trade({ amount: D("1893.94"), rate: D(264000), tomanTotal: D(500000000) });
-    expect(renderEntry(entry({ trade: t }))).toContain("۵۰۰,۰۰۰,۰۰۰ ÷ ۲۶۴,۰۰۰");
+    expect(renderEntry(entry({ trade: t }))).toContain("<b>جمع:</b> ۵۰۰,۰۰۰,۰۰۰ تومان");
+  });
+
+  it("a payment shows its bank, tracking code and deal; a crypto one calls the code a hash", () => {
+    const toman = trade({ side: "RECEIVE", amount: D(50000000), asset: "IRT", rate: null });
+    expect(renderEntry(entry({ trade: toman, bank: { id: 1, name: "سامان" }, ref: "123<456", linkedDealId: 3 })).split("\n")).toEqual([
+      "📥 <b>دریافت ۵۰,۰۰۰,۰۰۰ تومان</b> · <code>D-00007</code>",
+      "🏦 <b>بانک:</b> سامان",
+      "🔖 <b>کد پیگیری:</b> <code>123&lt;456</code>",
+      "🔗 <b>معامله:</b> <code>D-00003</code>",
+      "⏳ <b>در انتظار تایید</b>",
+    ]);
+    const usdt = trade({ side: "PAY", rate: null });
+    expect(renderEntry(entry({ trade: usdt, ref: "abc123" }))).toContain("🔎 <b>هش:</b> <code>abc123</code>");
+  });
+
+  it("leaves out who recorded or decided it, the date and any joke", () => {
+    const html = renderEntry(entry({
+      status: "approved", joke: "شوخی", createdBy: "Bob", decidedBy: "Sina", decidedAt: "2026-10-17T20:00:00+03:30",
+    }));
+    for (const gone of ["Bob", "Sina", "شوخی", "توسط", "🕒"]) expect(html).not.toContain(gone);
   });
 
   it("never shows the Nobitex price on a deal card (owner request)", () => {
@@ -71,16 +101,9 @@ describe("renderEntry", () => {
   });
 
   it("escapes user-supplied text", () => {
-    const html = renderEntry(entry({ trade: trade({ note: "<b>x</b>" }), createdBy: "<i>Bob" }));
+    const html = renderEntry(entry({ trade: trade({ note: "<b>x</b>" }) }));
     expect(html).not.toContain("<b>x</b>");
     expect(html).toContain("&lt;b&gt;x&lt;/b&gt;");
-    expect(html).toContain("&lt;i&gt;Bob");
-  });
-
-  it("appends the joke in italics before the status", () => {
-    const html = renderEntry(entry({ joke: "شوخی <u>" }));
-    expect(html).toContain("<i>شوخی &lt;u&gt;</i>");
-    expect(html.indexOf("شوخی")).toBeLessThan(html.indexOf("وضعیت"));
   });
 });
 
@@ -279,12 +302,13 @@ describe("renderSettlement", () => {
     expect(out).toContain("در انتظار تایید");
     expect(out).not.toContain("توسط Boss");
   });
-  it("shows approved and rejected payments with who decided", () => {
+  it("shows approved and rejected payments, without who decided", () => {
     const decided = { decidedBy: "Sina", decidedAt: "2026-10-17T20:00:00+03:30" };
     expect(renderSettlement(deal, [payment({ status: "approved", ...decided })])).toContain("تایید شد");
     const rejected = renderSettlement(deal, [payment({ status: "rejected", ...decided })]);
     expect(rejected).toContain("رد شد");
-    expect(rejected).toContain("رد توسط Sina");
+    expect(rejected).not.toContain("Sina");
+    expect(rejected.split("\n")).toHaveLength(4); // title, the deal, one payment, status
   });
 });
 
@@ -303,12 +327,11 @@ describe("transaction scan cards", () => {
   });
   const receive = trade({ side: "RECEIVE", rate: null });
 
-  it("RECEIVE entry with tx shows explorer link, short counterparty, fee and warnings", () => {
+  it("RECEIVE entry with tx shows the explorer link, its deal and warnings, not the fee or the other wallet", () => {
     const html = renderEntry(entry({ trade: receive, tx: meta(), linkedDealId: 3 }));
     expect(html).toContain(`href="https://tronscan.org/#/transaction/${TRON_HASH}"`);
-    expect(html).toContain("TWTV2W…jsBZ");
-    expect(html).toContain(fa(D("6.7735")));
-    expect(html).toContain("TRX");
+    expect(html).not.toContain("TWTV2W");
+    expect(html).not.toContain("TRX");
     expect(html).toContain(dealCode(3));
     expect(html).toContain("⚠️ تراکنش هنوز &lt;قطعی&gt; نشده");
     expect(html).not.toContain("<قطعی>");

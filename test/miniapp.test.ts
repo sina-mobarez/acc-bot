@@ -173,11 +173,11 @@ describe("accounts", () => {
     const chat = await newAccount();
     const app = appFor();
     const { status, json } = await call(app, "POST", `/api/accounts/${chat}/payments`, {
-      direction: "RECEIVE", amount: "۵۰ میلیون", note: "کارت",
+      direction: "RECEIVE", amount: "۵۰ میلیون", note: "کارت", ref: "۱۲۳۴۵۶",
     });
     expect(status).toBe(200);
     expect(json.entry).toMatchObject({
-      kind: "RECEIVE", amount: "50000000", asset: "IRT", status: "approved", note: "کارت", decidedBy: "@sina",
+      kind: "RECEIVE", amount: "50000000", asset: "IRT", status: "approved", note: "کارت", decidedBy: "@sina", ref: "123456",
     });
     expect((await getEntry(db, json.entry.id))?.status).toBe("approved");
     const sent = app.tg.calls.filter((c) => c.method === "sendMessage");
@@ -197,9 +197,17 @@ describe("accounts", () => {
     expect((await call(app, "POST", url, { direction: "PAY", amount: "0" })).status).toBe(400);
     expect((await call(app, "POST", url, { direction: "PAY", amount: "5", linkedDealId: foreign.id })).status).toBe(400);
     expect((await call(app, "POST", "/api/accounts/-1/payments", { direction: "PAY", amount: "5" })).status).toBe(404);
-    const ok = await call(app, "POST", url, { direction: "RECEIVE", amount: "40", asset: "تتر", linkedDealId: d.id });
+    // No tracking code / hash: refused, nothing saved.
+    const noRef = await call(app, "POST", url, { direction: "RECEIVE", amount: "40", asset: "تتر", linkedDealId: d.id });
+    expect(noRef.status).toBe(400);
+    expect(noRef.json.error).toContain("هش تراکنش");
+    expect((await call(app, "POST", url, { direction: "RECEIVE", amount: "40", ref: "  " })).json.error).toContain("کد پیگیری");
+    const ok = await call(app, "POST", url, { direction: "RECEIVE", amount: "40", asset: "تتر", linkedDealId: d.id, ref: "0xabc123" });
     expect(ok.status).toBe(200);
-    expect(ok.json.entry).toMatchObject({ asset: "USDT", amount: "40", linkedDealId: d.id });
+    expect(ok.json.entry).toMatchObject({ asset: "USDT", amount: "40", linkedDealId: d.id, ref: "0xabc123" });
+    // The code can be corrected later, but not blanked.
+    expect((await call(app, "PATCH", `/api/entries/${ok.json.entry.id}`, { ref: "0xdef456" })).json.entry.ref).toBe("0xdef456");
+    expect((await call(app, "PATCH", `/api/entries/${ok.json.entry.id}`, { ref: "" })).status).toBe(400);
   });
 });
 

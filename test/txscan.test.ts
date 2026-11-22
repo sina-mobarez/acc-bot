@@ -34,7 +34,7 @@ const trade = (over: Partial<Trade> = {}): Trade => ({
 const entry = (over: Partial<Entry> = {}): Entry => ({
   id: 7, chatId: -100, code: dealCode(7), trade: trade(), status: "approved", batchId: null, linkedDealId: null,
   cardMsgId: 1, joke: null, createdBy: "a", createdById: 1, createdAt: "2026-11-08T12:00:00+03:30", decidedBy: null,
-  decidedAt: null, cancelledBy: null, cancelledAt: null, tx: null, ...over,
+  decidedAt: null, cancelledBy: null, cancelledAt: null, tx: null, bank: null, ref: null, ...over,
 });
 
 const leg = (remaining: string | number): Leg => ({ asset: "USDT", dir: "client_owes", total: D(1000), remaining: D(remaining) });

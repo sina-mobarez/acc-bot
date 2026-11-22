@@ -54,6 +54,32 @@ const PAYMENT_RE = new RegExp(
   "isu",
 );
 
+const REF_CHARS = /^[A-Za-z0-9][A-Za-z0-9_-]{2,99}$/;
+const REF_LABEL = "(?:(?:کد|شماره)\\s+)?(?:پیگیری|رهگیری|ارجاع|مرجع)";
+const REF_IN_NOTE = new RegExp(`(?:^|\\s)${REF_LABEL}\\s*:?\\s*([A-Za-z0-9][A-Za-z0-9_-]{2,99})(?=\\s|$)`, "u");
+const HASH_IN_NOTE = /(?:^|\s)((?:0x)?[0-9a-fA-F]{64})(?=\s|$)/;
+
+/**
+ * A tracking code or transaction hash as stored: ASCII digits, label words («کد پیگیری») and
+ * spaces dropped. null when nothing code-like (3 to 100 letters, digits, `-`, `_`) is left.
+ */
+export function cleanRef(s: string): string | null {
+  const code = normalize(s)
+    .split(/[\s:]+/)
+    .filter((w) => /^[A-Za-z0-9_-]+$/.test(w))
+    .join("");
+  return REF_CHARS.test(code) ? code : null;
+}
+
+/** «… پیگیری ۱۲۳۴۵۶ …» or a 64-hex transaction hash inside a note: the reference and the note without it. */
+export function splitRef(note: string): { ref: string; note: string } | null {
+  const norm = normalize(note); // char-for-char, so indexes also fit the original note
+  const m = REF_IN_NOTE.exec(norm) ?? HASH_IN_NOTE.exec(norm);
+  if (!m) return null;
+  const rest = `${note.slice(0, m.index)} ${note.slice(m.index + m[0].length)}`.replace(/\s+/g, " ").trim();
+  return { ref: m[1], note: rest };
+}
+
 /** A message that is clearly a trade but can't be recorded; the message is Persian. */
 export class TradeError extends Error {}
 

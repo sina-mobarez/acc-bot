@@ -1,11 +1,14 @@
 /** The Mini App's admin JSON API. Every route needs `Authorization: tma <initData>` from an admin. */
 import Decimal from "decimal.js";
 import type { App } from "../app";
+import { bankKey } from "../banks";
 import { entryKeyboard, renderEntry } from "../cards";
 import {
   type Account, accountName, addAdmin, allApprovedByChat, approvedLedger, createEntry, deleteAccount, deleteEntry, editEntry, type Entry,
   getAccount, getEntry, getSetting, isAdmin, listAccounts, listAdmins, listEntries, recent, removeAdmin,
   setSetting, type Status, transition, updateAccount, deleteSetting, type Network,
+  addBankMove, type Bank, bankable, bankBalances, bankEffect, createBank, deleteBank, deleteBankMove, getBank,
+  listBankEntries, listBankMoves, listBanks, renameBank, setEntryBank, setEntryRef,
 } from "../db";
 import {
   cancelApproved, cancelPending, decideEntry, notifyChange, removeCard, STALE_SETTLEMENT, UNLINKED_NOTE,
@@ -13,7 +16,7 @@ import {
 import { DEFAULT_DEVIATION_PCT, expandRateShorthand, parseDeviationSetting } from "../intent";
 import { debts, type Leg, type LedgerEntry, openDeals, summarize } from "../ledger";
 import { assetCode, normalize, parseAmountText, TOMAN } from "../money";
-import { applyTradeEdit } from "../parser";
+import { applyTradeEdit, cleanRef } from "../parser";
 import { fetchUsdtToman, type UsdtPrice } from "../prices";
 import { TgError } from "../telegram";
 import { isPayment, type Side, type Trade } from "../trade";
@@ -62,6 +65,10 @@ const entryJson = (e: Entry) => ({
   decidedAt: e.decidedAt,
   cancelledBy: e.cancelledBy,
   cancelledAt: e.cancelledAt,
+  ref: e.ref,
+  txHash: e.tx?.hash ?? null,
+  bankId: e.bank?.id ?? null,
+  bankName: e.bank?.name ?? null,
 });
 
 const accountJson = (a: Account, owed: Map<string, Decimal>) => ({
@@ -267,8 +274,16 @@ async function postPayment({ app, req, actor }: Ctx, chatId: number) {
     }
   }
   const trade: Trade = { side: b.direction as Side, amount, asset, rate: null, note, tomanTotal: null };
+  let bankId: number | null = null;
+  if (b.bankId !== undefined && b.bankId !== null && b.bankId !== "") {
+    if (!bankable(trade)) throw bad("بانک فقط برای پرداخت تومانی است.");
+    bankId = (await bankOrThrow(app, intOf(b.bankId, "بانک"))).id;
+  }
+  // A payment is never saved without its tracking code (toman) or transaction hash (crypto).
+  const ref = typeof b.ref === "string" ? cleanRef(b.ref) : null;
+  if (!ref) throw bad(asset === TOMAN ? "کد پیگیری لازم است." : "هش تراکنش لازم است.");
   const created = await createEntry(app.db, {
-    chatId, trade, linkedDealId, createdBy: actor.name, createdById: actor.id, createdAt: app.now(),
+    chatId, trade, linkedDealId, bankId, ref, createdBy: actor.name, createdById: actor.id, createdAt: app.now(),
   });
   // The admin using the panel is the approver.
   await transition(app.db, [created.id], "pending", "approved", { decidedBy: actor.name, decidedAt: app.now() });
@@ -366,8 +381,22 @@ async function patchEntry({ app, req, actor }: Ctx, id: number) {
     ch.rate = expandRateShorthand(raw, cur.trade.asset, ref);
   }
   if (b.note !== undefined) ch.note = b.note === null ? "" : text(b.note, "توضیحات");
-  if (Object.keys(ch).length === 0) throw bad("چیزی برای تغییر نیست.");
-  await editEntry(app.db, id, applyTradeEdit(cur.trade, ch), actor.name, app.now());
+  // bankId: a bank's id, or null to take the payment off its bank.
+  let bankId: number | null | undefined;
+  if (b.bankId !== undefined) {
+    if (!bankable(cur.trade)) throw bad("بانک فقط برای پرداخت تومانی است.");
+    bankId = b.bankId === null || b.bankId === "" ? null : (await bankOrThrow(app, intOf(b.bankId, "بانک"))).id;
+  }
+  let ref: string | undefined;
+  if (b.ref !== undefined) {
+    const cleaned = typeof b.ref === "string" ? cleanRef(b.ref) : null;
+    if (!cleaned) throw bad("کد پیگیری / هش تراکنش نامعتبر است.");
+    ref = cleaned;
+  }
+  if (Object.keys(ch).length === 0 && bankId === undefined && ref === undefined) throw bad("چیزی برای تغییر نیست.");
+  if (ref !== undefined) await setEntryRef(app.db, id, ref);
+  if (Object.keys(ch).length > 0) await editEntry(app.db, id, applyTradeEdit(cur.trade, ch), actor.name, app.now());
+  if (bankId !== undefined) await setEntryBank(app.db, id, bankId);
   const fresh = await refreshCard(app, id);
   await notifyChange(app, fresh, panelNotice(fresh, "✏️ <b>ویرایش از پنل مدیریت</b>"));
   return { entry: entryJson(fresh) };
@@ -402,6 +431,95 @@ async function adminRemove({ app, url }: Ctx, rawId: string | null) {
   if (app.adminIds.has(userId)) throw bad("مدیر اصلی قابل حذف نیست.");
   if (!(await removeAdmin(app.db, userId))) throw notFound("این مدیر پیدا نشد.");
   return adminsOf(app);
+}
+
+// --- banks: our own toman accounts ------------------------------------------------------
+
+async function bankOrThrow(app: App, id: number): Promise<Bank> {
+  const b = await getBank(app.db, id);
+  if (!b) throw notFound("این بانک پیدا نشد.");
+  return b;
+}
+
+/** A bank name nobody else has (compared the way spoken names are matched). */
+async function bankName(app: App, v: unknown, exceptId?: number): Promise<string> {
+  const name = text(v, "نام بانک", 60);
+  const key = bankKey(name);
+  if (!key) throw bad("نام بانک نامعتبر است.");
+  const clash = (await listBanks(app.db)).some((b) => b.id !== exceptId && bankKey(b.name) === key);
+  if (clash) throw conflict("بانکی با این نام از قبل هست.");
+  return name;
+}
+
+async function banksList({ app }: Ctx) {
+  const [banks, balances] = await Promise.all([listBanks(app.db), bankBalances(app.db)]);
+  let total = new Decimal(0);
+  const rows = banks.map((b) => {
+    const balance = balances.get(b.id) ?? new Decimal(0);
+    total = total.plus(balance);
+    return { id: b.id, name: b.name, balance: balance.toFixed() };
+  });
+  return { banks: rows, total: total.toFixed() };
+}
+
+const BANK_HISTORY = 50;
+
+/** One bank: its balance and its latest movements (client payments and manual moves), newest first. */
+async function bankDetail({ app }: Ctx, id: number) {
+  const bank = await bankOrThrow(app, id);
+  const [balances, moves, entries] = await Promise.all([
+    bankBalances(app.db), listBankMoves(app.db, id, BANK_HISTORY), listBankEntries(app.db, id, BANK_HISTORY),
+  ]);
+  const items = [
+    ...moves.map((m) => ({
+      type: "move" as const, id: m.id, amount: m.amount.toFixed(), note: m.note, by: m.createdBy, at: m.createdAt,
+      code: null as string | null, chatId: null as number | null,
+    })),
+    ...entries.map((e) => ({
+      type: "entry" as const, id: e.id, amount: bankEffect(e.trade).toFixed(), note: e.trade.note, by: e.createdBy,
+      at: e.createdAt, code: e.code as string | null, chatId: e.chatId as number | null,
+    })),
+  ].sort((a, b) => Date.parse(b.at) - Date.parse(a.at) || b.id - a.id);
+  return {
+    bank: { id: bank.id, name: bank.name, balance: (balances.get(id) ?? new Decimal(0)).toFixed() },
+    items: items.slice(0, BANK_HISTORY),
+  };
+}
+
+async function bankAdd(c: Ctx) {
+  const b = await bodyOf(c.req);
+  await createBank(c.app.db, await bankName(c.app, b.name), c.app.now());
+  return banksList(c);
+}
+
+async function bankPatch(c: Ctx, id: number) {
+  const b = await bodyOf(c.req);
+  await bankOrThrow(c.app, id);
+  await renameBank(c.app.db, id, await bankName(c.app, b.name, id));
+  return bankDetail(c, id);
+}
+
+async function bankRemove({ app }: Ctx, id: number) {
+  if (!(await deleteBank(app.db, id))) throw notFound("این بانک پیدا نشد.");
+  return { ok: true };
+}
+
+/** A manual deposit ("in") or withdrawal ("out"): opening balance, fees, transfers. */
+async function bankMoveAdd(c: Ctx, id: number) {
+  const b = await bodyOf(c.req);
+  await bankOrThrow(c.app, id);
+  if (b.direction !== "in" && b.direction !== "out") throw bad("نوع حرکت نامعتبر است.");
+  const amount = positiveAmount(b.amount, "مبلغ");
+  const note = b.note === undefined || b.note === null ? "" : text(b.note, "توضیحات");
+  await addBankMove(c.app.db, {
+    bankId: id, amount: b.direction === "in" ? amount : amount.neg(), note, createdBy: c.actor.name, createdAt: c.app.now(),
+  });
+  return bankDetail(c, id);
+}
+
+async function bankMoveRemove(c: Ctx, id: number, moveId: number) {
+  if (!(await deleteBankMove(c.app.db, id, moveId))) throw notFound("این مورد پیدا نشد.");
+  return bankDetail(c, id);
 }
 
 const WALLETS: [key: "wallet_tron" | "wallet_bsc", network: Network, label: string][] = [
@@ -480,6 +598,19 @@ async function route(c: Ctx): Promise<unknown> {
   if ((r = /^\/api\/entries\/(\d+)$/.exec(pathname))) {
     if (m === "PATCH") return patchEntry(c, Number(r[1]));
     if (m === "DELETE") return removeEntry(c, Number(r[1]));
+  }
+  if (pathname === "/api/banks") {
+    if (m === "GET") return banksList(c);
+    if (m === "POST") return bankAdd(c);
+  }
+  if ((r = /^\/api\/banks\/(\d+)$/.exec(pathname))) {
+    if (m === "GET") return bankDetail(c, Number(r[1]));
+    if (m === "PATCH") return bankPatch(c, Number(r[1]));
+    if (m === "DELETE") return bankRemove(c, Number(r[1]));
+  }
+  if (m === "POST" && (r = /^\/api\/banks\/(\d+)\/moves$/.exec(pathname))) return bankMoveAdd(c, Number(r[1]));
+  if (m === "DELETE" && (r = /^\/api\/banks\/(\d+)\/moves\/(\d+)$/.exec(pathname))) {
+    return bankMoveRemove(c, Number(r[1]), Number(r[2]));
   }
   if (pathname === "/api/admins") {
     if (m === "GET") return adminsOf(c.app);

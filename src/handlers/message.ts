@@ -2,23 +2,25 @@
 import Decimal from "decimal.js";
 import type { Message, User } from "@grammyjs/types";
 import type { App } from "../app";
+import { matchBank, splitBankNote } from "../banks";
 import {
-  entryKeyboard, escapeHtml, editKeyboard, type Keyboard, renderAccountRemaining, renderBalance, renderDealRemaining, renderEditProposal,
-  renderEntry, renderList, renderPrices, renderSettlement, settlementKeyboard,
+  entryKeyboard, escapeHtml, editKeyboard, type Keyboard, renderAccountRemaining, renderBalance, renderBankMove, renderBanks, renderRefAsk,
+  renderDealRemaining, renderEditProposal, renderEntry, renderList, renderPrices, renderSettlement, settlementKeyboard,
 } from "../cards";
 import {
-  type Account, accountName, approvedLedger, createEntry, createPendingAction, type EditChanges, editPayload,
-  type Entry, findByCardMessage, getAccount, getByCode, getSetting, isAdmin, listAccounts, recent, setBatch,
-  setCardMessage, transition,
+  type Account, accountName, addBankMove, approvedLedger, type Bank, bankable, bankBalances, bankEffect, createEntry,
+  createPaymentDraft, createPendingAction, findPaymentDraft, type PaymentDraft, setDraftAsk, takePaymentDraft, type EditChanges, editPayload, type Entry, findByCardMessage, getAccount, getByCode, getSetting,
+  isAdmin, listAccounts, listBanks, recent, setBatch, setCardMessage, setEntryRef, transition,
 } from "../db";
 import {
   type Action, DEFAULT_DEVIATION_PCT, deviationPct, expandRateShorthand, parseDeviationSetting, toAction,
 } from "../intent";
-import { BUSY_TEXT, CLIENT_WRITE_REFUSALS, ORDINARY_LINES, gougingLine, pick } from "../jokes";
+import { BUSY_TEXT, CLIENT_WRITE_REFUSALS, pick } from "../jokes";
 import { allocate, openDeals, summarize } from "../ledger";
 import { normalize, parseAmountText } from "../money";
 import type { NluInput, NluOutput } from "../nlu";
-import { applyTradeEdit, parseMessage, TradeError } from "../parser";
+import { applyTradeEdit, cleanRef, parseMessage, splitRef, TradeError } from "../parser";
+import { TgError } from "../telegram";
 import { type CoinQuote, fetchCoinUsdt, fetchUsdtToman, type UsdtPrice } from "../prices";
 import { isPayment, type Trade } from "../trade";
 
@@ -28,9 +30,11 @@ const EMPTY_HINT =
 const PRIVATE_WRITE =
   "ثبت و تغییر معامله فقط در گروه همان مشتری انجام می‌شود (یا در مینی‌اپ). همان‌جا بنویسید 🙂";
 const NOT_FOUND = "پیدا نشد.";
+const BANKS_PRIVATE_ONLY = "موجودی بانک‌ها فقط در چت خصوصی با ربات یا پنل مدیریت نمایش داده می‌شود.";
 
-const DEAL_INTENTS = new Set<NluOutput["intent"]>(["settle_deal", "edit_deal", "cancel_deal"]);
-const WRITE_KINDS = new Set<Action["kind"]>(["create", "payment", "settle", "edit", "cancel"]);
+const BAD_REF = "کد پیگیری یا هش تراکنش را متوجه نشدم. دوباره بفرست.";
+const DEAL_INTENTS = new Set<NluOutput["intent"]>(["settle_deal", "edit_deal", "cancel_deal", "set_reference"]);
+const WRITE_KINDS = new Set<Action["kind"]>(["create", "payment", "settle", "edit", "cancel", "ref"]);
 const MAX_LISTED = 30;
 /** KuCoin calls per price question (one per coin): keeps a long Gemini coin list inside the subrequest budget. */
 const MAX_COINS = 10;
@@ -45,6 +49,8 @@ interface Ctx {
   usdt: UsdtPrice | null;
   alertPct: Decimal;
   account: Account | null;
+  /** Our own bank accounts; loaded for admins only. */
+  banks: Bank[];
 }
 
 /** cancelled_by for entries whose card could not be sent. */
@@ -116,17 +122,11 @@ async function nluInput(c: Ctx, text: string): Promise<NluInput> {
     deviationPct: c.alertPct.toFixed(),
     openDeals: open,
   };
+  if (c.banks.length) input.bankNames = c.banks.map((b) => b.name);
   if (!c.inGroup && c.role === "admin") {
     input.accountNames = (await listAccounts(c.app.db)).slice(0, 200).map(accountName);
   }
   return input;
-}
-
-/** Fixed joke when Gemini gave none: a tease for a trade far from Nobitex, otherwise an ordinary line. */
-function fallbackJoke(c: Ctx, t: Trade): string {
-  const d = deviation(c, t);
-  if (d && t.rate && d.dev.abs().gt(c.alertPct)) return gougingLine(c.msg.message_id, d.ref, t.rate);
-  return pick(ORDINARY_LINES, c.msg.message_id);
 }
 
 export async function handleMessage(app: App, msg: Message, text: string): Promise<void> {
@@ -139,15 +139,24 @@ export async function handleMessage(app: App, msg: Message, text: string): Promi
     return;
   }
 
-  const [usdt, account, devSetting] = await Promise.all([
+  // A reply to «کد پیگیری را بفرست»: finish that payment. No Gemini, no price lookup.
+  const asked = inGroup && role === "admin" ? msg.reply_to_message : undefined;
+  if (asked) {
+    const draft = await findPaymentDraft(app.db, msg.chat.id, asked.message_id);
+    if (draft) return finishDraft(c0, draft, text, asked.message_id);
+  }
+
+  const [usdt, account, devSetting, banks] = await Promise.all([
     fetchUsdtToman(app.fetch),
     inGroup ? getAccount(app.db, msg.chat.id) : Promise.resolve(null),
     getSetting(app.db, "deviation_pct"),
+    role === "admin" ? listBanks(app.db) : Promise.resolve([]),
   ]);
   const c: Ctx = {
     ...c0,
     usdt,
     account,
+    banks,
     humor: inGroup ? (account?.humorOn ?? true) : true,
     alertPct: parseDeviationSetting(devSetting) ?? new Decimal(DEFAULT_DEVIATION_PCT),
   };
@@ -173,15 +182,6 @@ export async function handleMessage(app: App, msg: Message, text: string): Promi
         return;
       }
       action = { kind: isPayment(trade) ? "payment" : "create", trade };
-      if (c.humor) {
-        const d = deviation(c, trade);
-        let teased: string | undefined;
-        if (d && d.dev.abs().gt(c.alertPct)) {
-          typing(c);
-          teased = (await app.nlu.understand(await nluInput(c, text)))?.joke?.trim() || undefined;
-        }
-        joke = teased ?? fallbackJoke(c, trade);
-      }
     }
   }
 
@@ -202,10 +202,15 @@ export async function handleMessage(app: App, msg: Message, text: string): Promi
     if (action.kind === "reply" && (out.intent === "create_trade" || out.intent === "record_payment")) {
       console.warn("nlu: incomplete write intent", JSON.stringify(out));
     }
+    // A joke only ever follows an answer to a question; cards carry none.
     joke = c.humor ? out.joke?.trim() || undefined : undefined;
-    if (c.humor && !joke && action.kind === "create") joke = fallbackJoke(c, action.trade);
   }
 
+  // In a private chat an admin's toman payment is a deposit to / withdrawal from one of our banks.
+  if (!inGroup && role === "admin" && action.kind === "payment") {
+    await bankMove(c, action);
+    return;
+  }
   if (!inGroup && WRITE_KINDS.has(action.kind)) {
     await send(c, PRIVATE_WRITE);
     return;
@@ -219,11 +224,34 @@ async function dispatch(c: Ctx, action: Action, joke: string | undefined, out: N
   switch (action.kind) {
     case "create":
     case "payment": {
+      const picked = pickBank(c, action.trade, action.kind === "payment" ? action.bankHint : undefined);
+      if (typeof picked === "string") return void (await send(c, picked));
+      const withRef = pickRef(picked.trade, action.kind === "payment" ? action.ref : undefined);
+      if (!withRef) return void (await send(c, BAD_REF));
+      // A payment written as a reply to an approved deal's card belongs to that deal.
+      let linkedDealId: number | null = null;
+      const replied = msg.reply_to_message;
+      if (action.kind === "payment" && replied) {
+        const card = await findByCardMessage(app.db, c.chatId, replied.message_id);
+        if (card && !isPayment(card.trade) && card.status === "approved") linkedDealId = card.id;
+      }
+      // A payment is never saved without its tracking code / hash: ask, and wait for the reply.
+      if (action.kind === "payment" && withRef.ref === null) {
+        const draftId = await createPaymentDraft(
+          app.db,
+          { chatId: c.chatId, trade: withRef.trade, bankId: picked.bank?.id ?? null, linkedDealId, rawText: text },
+          app.now(),
+        );
+        await setDraftAsk(app.db, draftId, await send(c, renderRefAsk(withRef.trade, picked.bank?.name ?? null)));
+        return;
+      }
       const e = await createEntry(app.db, {
         chatId: c.chatId,
-        trade: action.trade,
+        trade: withRef.trade,
+        bankId: picked.bank?.id ?? null,
+        ref: withRef.ref,
+        linkedDealId,
         rawText: text,
-        joke: joke ?? null,
         sourceMsgId: msg.message_id,
         createdBy: who(msg.from),
         createdById: msg.from?.id ?? 0,
@@ -234,7 +262,16 @@ async function dispatch(c: Ctx, action: Action, joke: string | undefined, out: N
       return;
     }
     case "settle":
-      return settle(c, action.dealCode);
+      return settle(c, action.dealCode, action.bankHint);
+    case "ref":
+      return setRef(c, action);
+    case "banks": {
+      // Our bank balances never appear in a group, whoever asks.
+      if (c.inGroup || c.role !== "admin") return void (await send(c, BANKS_PRIVATE_ONLY));
+      const balances = await bankBalances(app.db);
+      const rows = c.banks.map((b) => ({ name: b.name, balance: balances.get(b.id) ?? new Decimal(0) }));
+      return void (await send(c, renderBanks(rows)));
+    }
     case "edit":
       return edit(c, action, out, joke);
     case "cancel": {
@@ -279,6 +316,112 @@ async function dispatch(c: Ctx, action: Action, joke: string | undefined, out: N
       await send(c, withJoke(pick(CLIENT_WRITE_REFUSALS, msg.message_id), joke));
       return;
   }
+}
+
+const bankList = (c: Ctx): string => c.banks.map((b) => escapeHtml(b.name)).join("، ");
+
+/**
+ * The bank a toman payment names: the NLU's bank field, else a note that starts with a bank
+ * (the `#` grammar: «#دریافت ۵۰ میلیون سامان»). A named bank we don't have is a reply (a string),
+ * never a silent card without it. Other assets, and offices with no banks set up, have none.
+ */
+function pickBank(c: Ctx, trade: Trade, hint: string | undefined): { trade: Trade; bank: Bank | null } | string {
+  if (!bankable(trade) || !c.banks.length) return { trade, bank: null };
+  if (hint) {
+    const bank = matchBank(c.banks, hint);
+    return bank ? { trade, bank } : `بانک «${escapeHtml(hint)}» را نمی‌شناسم. بانک‌های تعریف‌شده: ${bankList(c)}`;
+  }
+  const split = splitBankNote(c.banks, trade.note);
+  return split ? { trade: { ...trade, note: split.note }, bank: split.bank } : { trade, bank: null };
+}
+
+/**
+ * The reference of a new entry: the NLU's ref field, else one written inside the note
+ * («… پیگیری ۱۲۳۴۵۶», or a transaction hash), which then leaves the note. null: a ref that isn't a code.
+ */
+function pickRef(trade: Trade, hint: string | undefined): { trade: Trade; ref: string | null } | null {
+  if (hint) {
+    const ref = cleanRef(hint);
+    return ref ? { trade, ref } : null;
+  }
+  const split = splitRef(trade.note);
+  return split ? { trade: { ...trade, note: split.note }, ref: split.ref } : { trade, ref: null };
+}
+
+/** An admin answered the bot's question with the reference: record the drafted payment as a pending card. */
+async function finishDraft(
+  c: Pick<Ctx, "app" | "msg" | "chatId">, draft: PaymentDraft, text: string, askMsgId: number,
+): Promise<void> {
+  const { app, msg } = c;
+  const ref = cleanRef(text) ?? splitRef(text)?.ref ?? null;
+  if (!ref) return void (await send(c, BAD_REF));
+  if (!(await takePaymentDraft(app.db, draft.id))) return;
+  const e = await createEntry(app.db, {
+    chatId: c.chatId,
+    trade: draft.trade,
+    bankId: draft.bankId,
+    linkedDealId: draft.linkedDealId,
+    ref,
+    rawText: draft.rawText,
+    sourceMsgId: msg.message_id,
+    createdBy: who(msg.from),
+    createdById: msg.from?.id ?? 0,
+    createdAt: app.now(),
+  });
+  await setCardMessage(app.db, e.id, await sendCard(c, [e.id], renderEntry(e), entryKeyboard(e)));
+  // The question has done its job; best effort (Telegram refuses for messages over 48 hours old).
+  app.defer(app.tg.call("deleteMessage", { chat_id: c.chatId, message_id: askMsgId }).catch(() => undefined));
+}
+
+/** «کد پیگیری ۱۲۳۴۵۶» for an existing payment or deal (by code or replied-to card): save it and update the card. */
+async function setRef(c: Ctx, action: Extract<Action, { kind: "ref" }>): Promise<void> {
+  const { app } = c;
+  const e = await getByCode(app.db, c.chatId, action.dealCode);
+  if (!e) return void (await send(c, notFound(action.dealCode)));
+  if (e.status !== "pending" && e.status !== "approved") {
+    return void (await send(c, `<code>${e.code}</code> ${e.status === "rejected" ? "رد" : "لغو"} شده است.`));
+  }
+  const ref = cleanRef(action.ref);
+  if (!ref) return void (await send(c, BAD_REF));
+  await setEntryRef(app.db, e.id, ref);
+  const fresh: Entry = { ...e, ref };
+  // Settlement payments share one batch card with no single owner; only a plain card is redrawn.
+  if (fresh.cardMsgId !== null && !fresh.batchId) {
+    try {
+      await app.tg.call("editMessageText", {
+        chat_id: c.chatId, message_id: fresh.cardMsgId, text: renderEntry(fresh), parse_mode: "HTML",
+        reply_markup: entryKeyboard(fresh) ?? { inline_keyboard: [] },
+      });
+    } catch (err) {
+      if (!(err instanceof TgError)) throw err;
+    }
+  }
+  await send(c, `🔖 برای <code>${e.code}</code> ثبت شد: <code>${escapeHtml(ref)}</code>`);
+}
+
+/** Private chat: record a deposit (RECEIVE) or withdrawal (PAY) straight on a bank and show its new balance. */
+async function bankMove(c: Ctx, action: Extract<Action, { kind: "payment" }>): Promise<void> {
+  const { app, msg } = c;
+  if (!c.banks.length || !bankable(action.trade)) return void (await send(c, PRIVATE_WRITE));
+  const picked = pickBank(c, action.trade, action.bankHint);
+  if (typeof picked === "string") return void (await send(c, picked));
+  const { bank } = picked;
+  const withRef = pickRef(picked.trade, action.ref);
+  if (!withRef) return void (await send(c, BAD_REF));
+  // A bank move has no reference column: the tracking code is kept in its note.
+  const trade: Trade = withRef.ref
+    ? { ...withRef.trade, note: [withRef.trade.note, `کد پیگیری ${withRef.ref}`].filter(Boolean).join(" · ") }
+    : withRef.trade;
+  if (!bank) {
+    return void (await send(
+      c,
+      `کدام بانک؟ مثلاً «واریز ۵۰ میلیون به سامان» یا «برداشت ۲۰ میلیون از سامان».\nبانک‌ها: ${bankList(c)}\n\n${PRIVATE_WRITE}`,
+    ));
+  }
+  const amount = bankEffect(trade);
+  await addBankMove(app.db, { bankId: bank.id, amount, note: trade.note, createdBy: who(msg.from), createdAt: app.now() });
+  const balance = (await bankBalances(app.db)).get(bank.id) ?? new Decimal(0);
+  await send(c, renderBankMove(bank.name, amount, trade.note, balance));
 }
 
 const notFound = (code: string) => `معامله‌ی <code>${escapeHtml(code)}</code> در این گروه پیدا نشد.`;
@@ -338,8 +481,14 @@ async function remaining(c: Ctx, action: Extract<Action, { kind: "remaining" }>,
   await send(c, withJoke(renderAccountRemaining(summarize(ledger.map((l) => l.trade))), joke));
 }
 
-async function settle(c: Ctx, code: string): Promise<void> {
+async function settle(c: Ctx, code: string, bankHint?: string): Promise<void> {
   const { app, msg } = c;
+  // «تسویه کن به سامان»: the toman leg of the settlement lands on that bank.
+  let bank: Bank | null = null;
+  if (bankHint && c.banks.length) {
+    bank = matchBank(c.banks, bankHint);
+    if (!bank) return void (await send(c, `بانک «${escapeHtml(bankHint)}» را نمی‌شناسم. بانک‌های تعریف‌شده: ${bankList(c)}`));
+  }
   const deal = await getByCode(app.db, c.chatId, code);
   if (!deal || isPayment(deal.trade)) return void (await send(c, notFound(code)));
   if (deal.status !== "approved") {
@@ -352,17 +501,19 @@ async function settle(c: Ctx, code: string): Promise<void> {
 
   const payments: Entry[] = [];
   for (const leg of legs) {
+    const trade: Trade = {
+      side: leg.dir === "client_owes" ? "RECEIVE" : "PAY",
+      amount: leg.remaining,
+      asset: leg.asset,
+      rate: null,
+      note: `تسویه ${deal.code}`,
+      tomanTotal: null,
+    };
     payments.push(
       await createEntry(app.db, {
         chatId: c.chatId,
-        trade: {
-          side: leg.dir === "client_owes" ? "RECEIVE" : "PAY",
-          amount: leg.remaining,
-          asset: leg.asset,
-          rate: null,
-          note: `تسویه ${deal.code}`,
-          tomanTotal: null,
-        },
+        trade,
+        bankId: bank && bankable(trade) ? bank.id : null,
         linkedDealId: deal.id,
         sourceMsgId: msg.message_id,
         createdBy: who(msg.from),
@@ -416,5 +567,5 @@ async function edit(
     createdBy: msg.from?.id ?? 0,
     createdAt: app.now(),
   });
-  await send(c, withJoke(renderEditProposal(deal, next, id), joke), editKeyboard(id));
+  await send(c, renderEditProposal(deal, next, id), editKeyboard(id));
 }
