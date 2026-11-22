@@ -1,6 +1,6 @@
 import Decimal from "decimal.js";
 import { describe, expect, test } from "vitest";
-import { assetCode, assetName, fa, fmtNum, parseAmountText } from "../src/money";
+import { assetCode, assetName, fa, faAmount, fmtNum, parseAmountText, shown } from "../src/money";
 import { parseTrade } from "../src/parser";
 import { tradeTotal } from "../src/trade";
 
@@ -77,5 +77,24 @@ describe("parseAmountText: compound amounts and separators", () => {
   });
   test.each(["۵ و", "و ۵ میلیون", "۵ ۲۳۲", "۵ میلیارد و سلام", "۵/۲۳/۴۵۶", "۵ میلیون و ۲ میلیارد"])("%s -> null", (s) => {
     expect(p(s)).toBeNull();
+  });
+});
+
+describe("shown amounts", () => {
+  const D = (s: string) => new Decimal(s);
+  test("USDT and fiat show two decimals, rounded half-up", () => {
+    expect(faAmount(D("2.0249"), "USDT")).toBe("۲/۰۲");
+    expect(faAmount(D("2.025"), "USDT")).toBe("۲/۰۳");
+    expect(faAmount(D("1893.939393"), "USD")).toBe("۱,۸۹۳/۹۴");
+    expect(faAmount(D("100"), "USDT")).toBe("۱۰۰");
+  });
+  test("toman shows no decimals", () => {
+    expect(faAmount(D("1500000.6"), "IRT")).toBe("۱,۵۰۰,۰۰۱");
+    expect(faAmount(D("266000.4"), "IRT")).toBe("۲۶۶,۰۰۰");
+  });
+  test("other assets stay in full, and a rounded-away negative is plain zero", () => {
+    expect(faAmount(D("0.00512345"), "BTC")).toBe("۰/۰۰۵۱۲۳۴۵");
+    expect(faAmount(D("-0.004"), "USDT")).toBe("۰");
+    expect(shown(D("2.0249"), "USDT").toFixed()).toBe("2.02");
   });
 });

@@ -130,6 +130,20 @@ export function fmtNum(v: Decimal): string {
   return (neg ? "-" : "") + grouped + (frac ? "." + frac : "");
 }
 
+/**
+ * An amount as it is shown (storage and arithmetic stay exact): toman has no decimals, USDT and
+ * the fiat currencies two, rounded half-up. Other assets (BTC, …) are shown in full.
+ */
+export function shown(v: Decimal, asset: string): Decimal {
+  const places = asset === TOMAN ? 0 : Object.hasOwn(PRECISION, asset) ? PRECISION[asset] : null;
+  if (places === null) return v;
+  const r = v.toDecimalPlaces(places, Decimal.ROUND_HALF_UP);
+  return r.isZero() ? new Decimal(0) : r; // never "-0"
+}
+
+/** `shown` in Persian digits: 2.0249 USDT -> «۲/۰۲», 1500000.6 toman -> «۱,۵۰۰,۰۰۱». */
+export const faAmount = (v: Decimal, asset: string): string => fa(shown(v, asset));
+
 const TO_FA = "۰۱۲۳۴۵۶۷۸۹";
 /** Format a number (or any string) with Persian digits: "26,435.05" -> "۲۶,۴۳۵/۰۵" (the Persian decimal slash). */
 export function fa(v: Decimal | number | string): string {

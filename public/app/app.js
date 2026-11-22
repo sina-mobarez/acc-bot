@@ -24,8 +24,21 @@ function jdate(iso) {
   const d = new Date(iso);
   return iso && !Number.isNaN(d.getTime()) ? dateFmt.format(d) : "";
 }
+/** Round a decimal string half-up to dp places, on the digits (never through a lossy Number). */
+function roundDec(str, dp) {
+  const m = /^(-?)(\d+)(?:\.(\d+))?$/.exec(String(str ?? ""));
+  if (!m || (m[3] ?? "").length <= dp) return str;
+  let n = BigInt(m[2] + m[3].slice(0, dp));
+  if (m[3][dp] >= "5") n += 1n;
+  const digits = n.toString().padStart(dp + 1, "0");
+  const out = dp ? `${digits.slice(0, -dp)}.${digits.slice(-dp)}` : digits;
+  return (n === 0n ? "" : m[1]) + out;
+}
+/** Decimals shown per asset: none for toman, two for USDT and fiat, everything else in full. */
+const PLACES = new Map([["IRT", 0], ["USDT", 2], ["USD", 2], ["EUR", 2], ["AED", 2], ["TRY", 2]]);
+const shown = (v, asset) => (PLACES.has(asset) ? roundDec(v, PLACES.get(asset)) : v);
 const assetName = (a) => (a === "IRT" ? "تومان" : a === "USDT" ? "تتر" : a);
-const money = (v, asset) => `${fmt(v)} ${assetName(asset)}`;
+const money = (v, asset) => `${fmt(shown(v, asset))} ${assetName(asset)}`;
 const KIND = { BUY: "خرید", SELL: "فروش", PAY: "پرداخت", RECEIVE: "دریافت" };
 const STATUS = { pending: "در انتظار", approved: "تایید شده", rejected: "رد شده", cancelled: "لغو شده" };
 
@@ -127,7 +140,7 @@ async function loadBanks() {
   return d;
 }
 /** A signed toman amount, coloured: money in is green, money out is red. */
-const signed = (v) => h("span", { class: v.startsWith("-") ? "red" : "green" }, `${v.startsWith("-") ? "−" : "+"}${fmt(v.replace(/^-/, ""))}`);
+const signed = (v) => h("span", { class: v.startsWith("-") ? "red" : "green" }, `${v.startsWith("-") ? "−" : "+"}${fmt(shown(v.replace(/^-/, ""), "IRT"))}`);
 /** «بدون بانک» plus one option per bank. */
 const bankSelect = (current) => h("select", {}, h("option", { value: "" }, "بدون بانک"),
   banks.map((b) => h("option", { value: b.id, selected: b.id === current }, b.name)));
@@ -160,7 +173,7 @@ async function showDash() {
   loading();
   const d = await attempt(() => api("GET", "/api/dashboard"));
   if (!d) return render("داشبورد", h("div", { class: "empty" }, "بارگذاری نشد."));
-  $("price").textContent = d.usdt ? `تتر: ${fmt(d.usdt.latest)} ت` : "";
+  $("price").textContent = d.usdt ? `تتر: ${fmt(shown(d.usdt.latest, "IRT"))} ت` : "";
   const kpi = (label, cls, ...v) => h("div", { class: "kpi" }, h("div", { class: "muted" }, label), h("div", { class: `v ${cls}` }, v));
   render(
     "داشبورد",
@@ -216,7 +229,7 @@ async function showClient() {
       ? h("div", { class: "list" }, d.openDeals.map((deal) =>
           h("div", { class: "row" }, h("span", { class: "grow" }, deal.code),
             h("span", { class: "nums" }, deal.legs.map((l) =>
-              h("div", { class: "muted" }, `${l.dir === "client_owes" ? "طلب ما" : "بدهی ما"}: ${money(l.remaining, l.asset)} از ${fmt(l.total)}`))))))
+              h("div", { class: "muted" }, `${l.dir === "client_owes" ? "طلب ما" : "بدهی ما"}: ${money(l.remaining, l.asset)} از ${fmt(shown(l.total, l.asset))}`))))))
       : h("div", { class: "empty" }, "معامله‌ی بازی نیست."),
     h("h3", {}, "ثبت واریز"),
     paymentForm(d),
@@ -290,7 +303,7 @@ function paymentForm(d) {
 function dealRow(e, { client, refresh }) {
   const isPay = e.kind === "PAY" || e.kind === "RECEIVE";
   const title = `${KIND[e.kind] ?? e.kind} ${money(e.amount, e.asset)}`;
-  const sub = [e.code, client ? clientName(e.chatId) : null, e.rate ? `فی ${fmt(e.rate)}` : null,
+  const sub = [e.code, client ? clientName(e.chatId) : null, e.rate ? `فی ${fmt(shown(e.rate, "IRT"))}` : null,
     e.bankName ? `🏦 ${e.bankName}` : null, e.ref ? `🔖 ${e.ref}` : null, e.note || null]
     .filter(Boolean).join(" · ");
   const act = (label, cls, fn) => h("button", { class: `btn sm ${cls}`, onclick: async (ev) => {

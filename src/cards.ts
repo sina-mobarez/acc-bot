@@ -4,7 +4,7 @@ import { explorerUrl } from "./chain";
 import { dealCode, type Entry, type Status, type TxMeta, type TxScan } from "./db";
 import type { Account, Leg } from "./ledger";
 import { debts } from "./ledger";
-import { assetName, fa, TOMAN } from "./money";
+import { assetName, fa, faAmount, TOMAN } from "./money";
 import type { CoinQuote, UsdtPrice } from "./prices";
 import { byToman, isPayment, type Side, type Trade, tradeTotal } from "./trade";
 import { networkName } from "./txscan";
@@ -55,7 +55,8 @@ export function jalaliDate(iso: string): string {
   return fa(`${p.year}/${p.month}/${p.day}`);
 }
 
-const money = (v: Decimal): string => fa(v);
+/** A toman figure (a price, a total, a bank balance): no decimals. */
+const money = (v: Decimal): string => faAmount(v, TOMAN);
 
 export interface EntryOpts {
   error?: string;
@@ -78,7 +79,7 @@ export function renderEntry(e: Entry, o: EntryOpts = {}): string {
   const [icon, side] = SIDE[t.side];
   const name = escapeHtml(assetName(t.asset));
   const total = tradeTotal(t);
-  const lines = [`${icon} <b>${side} ${fa(t.amount)} ${name}</b> · <code>${e.code}</code>`];
+  const lines = [`${icon} <b>${side} ${faAmount(t.amount, t.asset)} ${name}</b> · <code>${e.code}</code>`];
 
   if (!isPayment(t) && t.rate !== null && total) {
     lines.push(`💵 <b>قیمت:</b> ${money(t.rate)} · <b>جمع:</b> ${money(total)} تومان`);
@@ -104,7 +105,7 @@ export const refName = (t: Trade): string => (t.asset === TOMAN ? "کد پیگی
 /** A payment that is complete except for its reference: nothing is saved until an admin replies with it. */
 export function renderRefAsk(t: Trade, bank: string | null): string {
   const [icon, side] = SIDE[t.side];
-  const head = `${icon} <b>${side} ${fa(t.amount)} ${escapeHtml(assetName(t.asset))}</b>` + (bank ? ` · 🏦 ${escapeHtml(bank)}` : "");
+  const head = `${icon} <b>${side} ${faAmount(t.amount, t.asset)} ${escapeHtml(assetName(t.asset))}</b>` + (bank ? ` · 🏦 ${escapeHtml(bank)}` : "");
   return `${head}\n🔖 <b>${refName(t)}</b> را در ریپلای همین پیام بفرست تا ثبت شود. بدون آن ثبت نمی‌شود.`;
 }
 
@@ -121,7 +122,7 @@ function txLines(m: TxMeta): string[] {
 /** A scanned transfer waiting for an admin to pick its deal. */
 export function renderTxScan(s: TxScan, note?: string): string {
   const [icon, side] = SIDE[s.side];
-  const lines = [`${icon} <b>${side} ${fa(s.amount)} ${escapeHtml(assetName("USDT"))}</b>`, ...txLines(s.meta)];
+  const lines = [`${icon} <b>${side} ${faAmount(s.amount, "USDT")} ${escapeHtml(assetName("USDT"))}</b>`, ...txLines(s.meta)];
   for (const w of s.meta.warnings) lines.push(`⚠️ ${escapeHtml(w)}`);
   if (note) lines.push("", `ℹ️ ${escapeHtml(note)}`);
   lines.push("<b>برای کدام معامله؟</b> (فقط مدیر)");
@@ -134,7 +135,7 @@ export const MAX_PICKER_DEALS = 8;
 export function txPickerKeyboard(scanId: number, deals: { id: number; code: string; remaining: Decimal }[]): Keyboard {
   const rows = deals
     .slice(0, MAX_PICKER_DEALS)
-    .map((d) => [btn(`${d.code} · ${fa(d.remaining)} تتر`, `tp:${scanId}:${d.id}`)]);
+    .map((d) => [btn(`${d.code} · ${faAmount(d.remaining, "USDT")} تتر`, `tp:${scanId}:${d.id}`)]);
   rows.push([btn("بدون معامله", `tp:${scanId}:0`)]);
   return { inline_keyboard: rows };
 }
@@ -163,7 +164,7 @@ export function entryKeyboard(e: Entry, confirmCancel = false): Keyboard | null 
 
 function tradeLine(t: Trade, direction = true): string {
   const [icon, side] = SIDE[t.side];
-  let line = `${icon} ${side} ${fa(t.amount)} ${escapeHtml(assetName(t.asset))}`;
+  let line = `${icon} ${side} ${faAmount(t.amount, t.asset)} ${escapeHtml(assetName(t.asset))}`;
   const total = tradeTotal(t);
   if (isPayment(t)) line += direction ? ` (${DIRECTION[t.side]})` : "";
   else if (t.rate !== null && total) line += ` × ${money(t.rate)} = <b>${money(total)}</b> تومان`;
@@ -189,7 +190,7 @@ export function settlementKeyboard(batchId: number | string): Keyboard {
 
 function describeTrade(t: Trade): string {
   const total = tradeTotal(t);
-  const parts = [`${fa(t.amount)} ${escapeHtml(assetName(t.asset))}`];
+  const parts = [`${faAmount(t.amount, t.asset)} ${escapeHtml(assetName(t.asset))}`];
   if (t.rate !== null) parts.push(`× ${money(t.rate)}`);
   if (total && !isPayment(t)) parts.push(`= ${money(total)} تومان`);
   if (t.note) parts.push(`· ${escapeHtml(t.note)}`);
@@ -231,13 +232,13 @@ export function renderList(name: string, entries: Entry[]): string {
 export function debtLine(asset: string, owed: Decimal): string {
   const name = escapeHtml(assetName(asset));
   if (owed.isZero()) return `✅ ${name}: تسویه`;
-  if (owed.gt(0)) return `🔴 ${name}: مشتری <b>${fa(owed)}</b> ${name} به ما بدهکار است`;
-  return `🔵 ${name}: ما <b>${fa(owed.neg())}</b> ${name} به مشتری بدهکاریم`;
+  if (owed.gt(0)) return `🔴 ${name}: مشتری <b>${faAmount(owed, asset)}</b> ${name} به ما بدهکار است`;
+  return `🔵 ${name}: ما <b>${faAmount(owed.neg(), asset)}</b> ${name} به مشتری بدهکاریم`;
 }
 
 /** One-line "how much is left" sentence; toman owed by the client reads «واریز کنه». */
 function remainingLine(prefix: string, clientOwes: boolean, asset: string, amount: Decimal): string {
-  const amt = `<b>${fa(amount)} ${escapeHtml(assetName(asset))}</b>`;
+  const amt = `<b>${faAmount(amount, asset)} ${escapeHtml(assetName(asset))}</b>`;
   if (!clientOwes) return `${prefix}ما باید ${amt} دیگه ${prefix ? "به مشتری " : ""}بدیم.`;
   return `${prefix}مشتری باید ${amt} دیگه ${asset === TOMAN ? "واریز کنه" : "بده"}.`;
 }
@@ -271,7 +272,7 @@ function openDealLines(open: { id: number; legs: Leg[] }[]): string[] {
       .map((l) => {
         const nm = escapeHtml(assetName(l.asset));
         const who = l.dir === "client_owes" ? "مشتری" : "ما";
-        return `${who}: ${fa(l.remaining)} از ${fa(l.total)} ${nm}`;
+        return `${who}: ${faAmount(l.remaining, l.asset)} از ${faAmount(l.total, l.asset)} ${nm}`;
       });
     lines.push(`📌 <code>${dealCode(d.id)}</code> · ${legs.join(" · ")}`);
   }
@@ -297,7 +298,7 @@ export function renderBalance(name: string, acc: Account): string {
     const client = v.neg(); // client's view: what they owe is negative
     const label = v.isZero() ? "✅ تسویه شده" : v.gt(0) ? "🔴 بدهکار" : "🟢 بستانکار";
     const icon = BALANCE_ICON.get(asset) ?? "🪙";
-    lines.push(`${icon} <b>${escapeHtml(asset)}</b>   <code>${v.isZero() ? fa(new Decimal(0)) : fa(client)}</code>  /  ${label}`);
+    lines.push(`${icon} <b>${escapeHtml(asset)}</b>   <code>${faAmount(client, asset)}</code>  /  ${label}`);
   }
   if (acc.unpriced) lines.push(`<i>⚠️ ${fa(acc.unpriced)} معامله بدون قیمت در مانده تومانی حساب نشده است.</i>`);
   return lines.join("\n");
@@ -315,10 +316,10 @@ export function renderReminder(
   const clientOwes = d.filter(([, v]) => v.gt(0));
   const weOwe = d.filter(([, v]) => v.lt(0));
   for (const [asset, v] of clientOwes) {
-    lines.push(`🔴 شما <b>${fa(v)}</b> ${escapeHtml(assetName(asset))} به ما بدهکارید`);
+    lines.push(`🔴 شما <b>${faAmount(v, asset)}</b> ${escapeHtml(assetName(asset))} به ما بدهکارید`);
   }
   for (const [asset, v] of weOwe) {
-    lines.push(`🔵 ما هم <b>${fa(v.neg())}</b> ${escapeHtml(assetName(asset))} به شما بدهکاریم`);
+    lines.push(`🔵 ما هم <b>${faAmount(v.neg(), asset)}</b> ${escapeHtml(assetName(asset))} به شما بدهکاریم`);
   }
   if (!clientOwes.length && !weOwe.length) lines.push("✅ حساب کاملاً تسویه است.");
   if (open.length) lines.push(LINE, "📂 <b>معاملات باز</b>", ...openDealLines(open));
