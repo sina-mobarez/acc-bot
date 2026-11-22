@@ -279,9 +279,13 @@ async function postPayment({ app, req, actor }: Ctx, chatId: number) {
     if (!bankable(trade)) throw bad("بانک فقط برای پرداخت تومانی است.");
     bankId = (await bankOrThrow(app, intOf(b.bankId, "بانک"))).id;
   }
-  // A payment is never saved without its tracking code (toman) or transaction hash (crypto).
-  const ref = typeof b.ref === "string" ? cleanRef(b.ref) : null;
-  if (!ref) throw bad(asset === TOMAN ? "کد پیگیری لازم است." : "هش تراکنش لازم است.");
+  // The tracking code (toman) or transaction hash (crypto): optional unless «require_ref» is on.
+  const rawRef = typeof b.ref === "string" ? b.ref.trim() : "";
+  const ref = rawRef ? cleanRef(rawRef) : null;
+  if (rawRef && !ref) throw bad("کد پیگیری / هش تراکنش نامعتبر است.");
+  if (!ref && (await getSetting(app.db, "require_ref")) === "1") {
+    throw bad(asset === TOMAN ? "کد پیگیری لازم است." : "هش تراکنش لازم است.");
+  }
   const created = await createEntry(app.db, {
     chatId, trade, linkedDealId, bankId, ref, createdBy: actor.name, createdById: actor.id, createdAt: app.now(),
   });
@@ -528,13 +532,14 @@ const WALLETS: [key: "wallet_tron" | "wallet_bsc", network: Network, label: stri
 ];
 
 async function settingsGet({ app }: Ctx) {
-  const [dev, rem, tron, bsc] = await Promise.all([
+  const [dev, rem, tron, bsc, requireRef] = await Promise.all([
     getSetting(app.db, "deviation_pct"), getSetting(app.db, "reminders_default"),
-    getSetting(app.db, "wallet_tron"), getSetting(app.db, "wallet_bsc"),
+    getSetting(app.db, "wallet_tron"), getSetting(app.db, "wallet_bsc"), getSetting(app.db, "require_ref"),
   ]);
   return {
     deviation_pct: (parseDeviationSetting(dev) ?? new Decimal(DEFAULT_DEVIATION_PCT)).toFixed(),
     reminders_default: rem !== "0",
+    require_ref: requireRef === "1",
     wallet_tron: tron ? parseWallet("TRON", tron) : null,
     wallet_bsc: bsc ? parseWallet("BSC", bsc) : null,
   };
@@ -564,7 +569,9 @@ async function settingsPatch(c: Ctx) {
     if (addr === null) throw bad(`آدرس کیف پول ${label} معتبر نیست.`);
     wallets.push([key, addr]);
   }
-  if (dev === null && rem === undefined && !wallets.length) throw bad("چیزی برای تغییر نیست.");
+  const requireRef = b.require_ref === undefined ? undefined : flag(b.require_ref, "الزام کد پیگیری");
+  if (dev === null && rem === undefined && requireRef === undefined && !wallets.length) throw bad("چیزی برای تغییر نیست.");
+  if (requireRef !== undefined) await setSetting(c.app.db, "require_ref", requireRef ? "1" : "0");
   if (dev !== null) await setSetting(c.app.db, "deviation_pct", dev.toFixed());
   if (rem !== undefined) await setSetting(c.app.db, "reminders_default", rem ? "1" : "0");
   for (const [key, addr] of wallets) {

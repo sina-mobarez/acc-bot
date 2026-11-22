@@ -1,6 +1,6 @@
 import { env } from "cloudflare:workers";
 import Decimal from "decimal.js";
-import { describe, expect, test, vi } from "vitest";
+import { describe, expect, onTestFinished, test, vi } from "vitest";
 import {
   addAdmin, createEntry, getEntry, getSetting, listAccounts, type NewEntry, setCardMessage, setSetting, transition,
   upsertAccount,
@@ -197,7 +197,10 @@ describe("accounts", () => {
     expect((await call(app, "POST", url, { direction: "PAY", amount: "0" })).status).toBe(400);
     expect((await call(app, "POST", url, { direction: "PAY", amount: "5", linkedDealId: foreign.id })).status).toBe(400);
     expect((await call(app, "POST", "/api/accounts/-1/payments", { direction: "PAY", amount: "5" })).status).toBe(404);
-    // No tracking code / hash: refused, nothing saved.
+    // With require_ref on, no tracking code / hash is refused; off (the default), it is optional.
+    expect((await call(app, "POST", url, { direction: "RECEIVE", amount: "7" })).json.entry.ref).toBeNull();
+    expect((await call(app, "PATCH", "/api/settings", { require_ref: true })).json.require_ref).toBe(true);
+    onTestFinished(() => setSetting(db, "require_ref", "0"));
     const noRef = await call(app, "POST", url, { direction: "RECEIVE", amount: "40", asset: "تتر", linkedDealId: d.id });
     expect(noRef.status).toBe(400);
     expect(noRef.json.error).toContain("هش تراکنش");
@@ -392,10 +395,10 @@ describe("admins and settings", () => {
     const app = appFor();
     await db.prepare("DELETE FROM settings WHERE key IN ('deviation_pct', 'reminders_default', 'wallet_tron', 'wallet_bsc')").run();
     expect((await call(app, "GET", "/api/settings")).json).toEqual({
-      deviation_pct: "3", reminders_default: true, wallet_tron: null, wallet_bsc: null,
+      deviation_pct: "3", reminders_default: true, require_ref: false, wallet_tron: null, wallet_bsc: null,
     });
     expect((await call(app, "PATCH", "/api/settings", { reminders_default: false })).json).toEqual({
-      deviation_pct: "3", reminders_default: false, wallet_tron: null, wallet_bsc: null,
+      deviation_pct: "3", reminders_default: false, require_ref: false, wallet_tron: null, wallet_bsc: null,
     });
     expect(await getSetting(db, "reminders_default")).toBe("0");
     expect(await getSetting(db, "deviation_pct")).toBeNull(); // untouched by a partial patch

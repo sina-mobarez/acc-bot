@@ -1,7 +1,7 @@
 import { env } from "cloudflare:workers";
 import Decimal from "decimal.js";
 import type { Message } from "@grammyjs/types";
-import { describe, expect, test } from "vitest";
+import { describe, expect, onTestFinished, test } from "vitest";
 import { renderBalance } from "../src/cards";
 import {
   approvedLedger,
@@ -110,7 +110,19 @@ describe("fast path", () => {
     expect(lastButtons(a)).toContain(`ok:${e.id}`);
   });
 
-  test("a payment without its code is not saved: the bot asks, and the admin's reply records it", async () => {
+  test("by default the code is optional: a payment without one gets its card", async () => {
+    const chat = freshGroup();
+    const a = app();
+    const m = msg(chat, ADMIN, "#دریافت ۵۰ میلیون تومن");
+    await handleMessage(a, m, m.text!);
+    const [e] = await recent(db, chat.id, 5);
+    expect(e.ref).toBeNull();
+    expect(lastButtons(a)).toContain(`ok:${e.id}`);
+  });
+
+  test("require_ref on: a payment without its code is not saved; the bot asks, and the admin's reply records it", async () => {
+    await setSetting(db, "require_ref", "1");
+    onTestFinished(() => setSetting(db, "require_ref", "0"));
     const chat = freshGroup();
     const a = app();
     const m = msg(chat, ADMIN, "#دریافت ۵۰ میلیون تومن");
@@ -143,7 +155,9 @@ describe("fast path", () => {
     expect((await recent(db, chat.id, 5)).filter((x) => x.ref !== null)).toHaveLength(1);
   });
 
-  test("a USDT payment needs a transaction hash; the NLU's ref field is cleaned", async () => {
+  test("require_ref on: a USDT payment needs a transaction hash; the NLU's ref field is cleaned", async () => {
+    await setSetting(db, "require_ref", "1");
+    onTestFinished(() => setSetting(db, "require_ref", "0"));
     const chat = freshGroup();
     const none = app(nlu({ intent: "record_payment", direction: "PAY", amount_text: "۱۰۰", asset: "تتر" }));
     const m1 = msg(chat, ADMIN, "صد تتر فرستادم");

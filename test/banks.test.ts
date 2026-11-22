@@ -1,10 +1,10 @@
 import { env } from "cloudflare:workers";
 import Decimal from "decimal.js";
 import type { Message } from "@grammyjs/types";
-import { beforeAll, describe, expect, test } from "vitest";
+import { beforeAll, describe, expect, onTestFinished, test } from "vitest";
 import { bankKey, matchBank, splitBankNote } from "../src/banks";
 import {
-  type Bank, bankBalances, cancelEntry, createBank, createEntry, getEntry, listBankMoves, listBanks, recent, transition,
+  type Bank, bankBalances, setSetting, cancelEntry, createBank, createEntry, getEntry, listBankMoves, listBanks, recent, transition,
   upsertAccount,
 } from "../src/db";
 import { handleCommand } from "../src/handlers/commands";
@@ -153,7 +153,9 @@ describe("private chat", () => {
     await handleMessage(a, msg(PRIVATE, ADMIN, "برداشت ۱۰ میلیون از سامان"), "برداشت ۱۰ میلیون از سامان");
     expect(await balanceOf(saman)).toBe(before.plus(20_000_000).toFixed());
     expect(texts(a).at(-1)).toContain("برداشت ۱۰,۰۰۰,۰۰۰ تومان");
-    // The bot's question keeps the bank, and a private move keeps its code in the note.
+    // The bot's question (require_ref on) keeps the bank.
+    await setSetting(db, "require_ref", "1");
+    onTestFinished(() => setSetting(db, "require_ref", "0"));
     const g = group();
     const q = app({ intent: "record_payment", direction: "RECEIVE", amount_text: "۱ میلیون", bank: "سامان" });
     await handleMessage(q, msg(g, ADMIN, "x"), "x");

@@ -235,8 +235,8 @@ async function dispatch(c: Ctx, action: Action, joke: string | undefined, out: N
         const card = await findByCardMessage(app.db, c.chatId, replied.message_id);
         if (card && !isPayment(card.trade) && card.status === "approved") linkedDealId = card.id;
       }
-      // A payment is never saved without its tracking code / hash: ask, and wait for the reply.
-      if (action.kind === "payment" && withRef.ref === null) {
+      // With «require_ref» on, a payment is not saved without its tracking code / hash: ask, and wait for the reply.
+      if (action.kind === "payment" && withRef.ref === null && (await getSetting(app.db, "require_ref")) === "1") {
         const draftId = await createPaymentDraft(
           app.db,
           { chatId: c.chatId, trade: withRef.trade, bankId: picked.bank?.id ?? null, linkedDealId, rawText: text },

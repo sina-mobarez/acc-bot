@@ -278,7 +278,7 @@ function paymentForm(d) {
   const deal = h("select", {}, h("option", { value: "" }, "بدون ارتباط با معامله"),
     d.openDeals.map((x) => h("option", { value: x.id }, x.code)));
   const bank = bankSelect(null);
-  const ref = h("input", { dir: "ltr", placeholder: "الزامی" });
+  const ref = h("input", { dir: "ltr", placeholder: "اختیاری" });
   const btn = h("button", { class: "btn", onclick: async () => {
     btn.disabled = true;
     const body = { direction: dir.value, amount: amount.value, note: note.value, ref: ref.value.trim() };
@@ -513,6 +513,13 @@ async function showSettings() {
         else showSettings();
       } })),
       h("div", { class: "muted" }, "فقط برای گروه‌هایی که از این به بعد اضافه می‌شوند؛ هر گروه را جدا هم می‌شود تغییر داد.")),
+    h("h3", {}, "کد پیگیری / هش تراکنش"),
+    h("div", { class: "card" }, h("label", { class: "sw" }, h("span", {}, "ثبت پرداخت و دریافت بدون کد ممنوع باشد"),
+      h("input", { type: "checkbox", checked: set.require_ref, onchange: async (e) => {
+        if (await attempt(() => api("PATCH", "/api/settings", { require_ref: e.target.checked }))) toast("ذخیره شد.");
+        else showSettings();
+      } })),
+      h("div", { class: "muted" }, "اگر روشن باشد، ربات برای هر پرداخت یا دریافت بدون کد پیگیری (تومان) یا هش (کریپتو) آن را می‌پرسد و تا جواب ندهید ثبت نمی‌کند. خاموش: کد اختیاری است.")),
     h("h3", {}, "مدیرها"),
     h("div", { class: "list" }, adm.admins.map((a) =>
       h("div", { class: "row" },

@@ -10,7 +10,7 @@ In a client group, tag `@bot` or reply to one of its messages, then write normal
 @bot خرید ۱۰۰ تتر رو ۲۷۵                  <- trade: we bought 100 USDT at 275,000 toman
 @bot فروختیم ۵۰۰ میلیون تومن تتر ۲۶۵ هزار   <- toman-amount trade: USDT = toman ÷ price
 @bot ۵۰ میلیون تومن دریافت کردیم پیگیری ۱۲۳۴۵۶  <- payment received from the client, with its tracking code
-@bot ۲۷ میلیون تومن پرداخت کردیم            <- payment sent to the client; the bot asks for the tracking code
+@bot ۲۷ میلیون تومن پرداخت کردیم            <- payment sent to the client
 @bot تسویه                                   <- reply to a deal card: settle it against recorded payments
 @bot مقدار D-00012 رو ۵۰ کن / لغو D-00012      <- edit or cancel a deal by its card code
 @bot مانده حساب چنده؟                         <- balance: one line per currency (minus = بدهکار, plus = بستانکار)
@@ -35,7 +35,9 @@ A deal card shows the numbers (no Nobitex price; a rate far from Nobitex only ch
 
 Clients can post hashes too. This is the one way a client can cause a card, and it stays pending until an admin approves it. Set the two wallet addresses in the Mini App settings; a network with no wallet isn't checked.
 
-**Tracking code / transaction hash.** A payment or receipt is never saved without its reference: the bank tracking code (کد پیگیری) for toman, the transaction hash for crypto. Write it in the message (`… پیگیری ۱۲۳۴۵۶`, or paste the hash). If it is missing, the bot posts a one-line question and saves nothing; an admin replies to that question with the code and the pending card appears. The Mini App's payment form refuses without it too. Exceptions: payments created by «تسویه» (add the code afterwards: `@bot کد پیگیری D-00015 ۱۲۳۴۵۶`, or reply to a payment card with the code), scanned transactions (the hash is already there), and direct bank moves in the private chat. A payment written as a reply to an approved deal's card is linked to that deal.
+**Tracking code / transaction hash.** A payment can carry its reference: the bank tracking code (کد پیگیری) for toman, the transaction hash for crypto. Write it in the message (`… پیگیری ۱۲۳۴۵۶`, or paste the hash) and it shows on the card. Add or correct it later by replying to the payment's card with the code, by code (`@bot کد پیگیری D-00015 ۱۲۳۴۵۶`), or in the Mini App. A payment written as a reply to an approved deal's card is linked to that deal.
+
+It is optional by default. Turn on «ثبت پرداخت و دریافت بدون کد ممنوع باشد» in the Mini App settings to require it: then a payment without one is not saved; the bot posts a one-line question, an admin replies to it with the code and the pending card appears, and the Mini App's payment form refuses without it. Payments created by «تسویه», scanned transactions (the hash is already there) and direct bank moves in the private chat are never asked.
 
 **Cards are short.** A card shows what it is, the numbers, the bank, the code or hash, the linked deal, the note and the status. It does not show who recorded or approved it, the date, or a joke; those stay in the database and the Mini App. Jokes (when «شوخی‌ها» is on for a group) only follow answers to questions such as balance or price.
 

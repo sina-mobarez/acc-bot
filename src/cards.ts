@@ -106,7 +106,7 @@ export const refName = (t: Trade): string => (t.asset === TOMAN ? "کد پیگی
 export function renderRefAsk(t: Trade, bank: string | null): string {
   const [icon, side] = SIDE[t.side];
   const head = `${icon} <b>${side} ${faAmount(t.amount, t.asset)} ${escapeHtml(assetName(t.asset))}</b>` + (bank ? ` · 🏦 ${escapeHtml(bank)}` : "");
-  return `${head}\n🔖 <b>${refName(t)}</b> را در ریپلای همین پیام بفرست تا ثبت شود. بدون آن ثبت نمی‌شود.`;
+  return `${head}\n🔖 <b>${refName(t)}</b> را در ریپلای همین پیام بفرست تا ثبت شود.`;
 }
 
 const short = (s: string): string => (s.length > 12 ? `${s.slice(0, 6)}…${s.slice(-4)}` : s);
